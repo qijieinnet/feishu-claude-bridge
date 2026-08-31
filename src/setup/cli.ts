@@ -1,6 +1,7 @@
 // `npm run setup`：扫码创建飞书应用，自动写入 .env。
 import fs from "node:fs";
 import path from "node:path";
+import { bridgeHome } from "../config.js";
 import {
   beginRegistration,
   initRegistration,
@@ -8,13 +9,14 @@ import {
   printQrCode,
 } from "./register.js";
 
-const ENV_PATH = path.join(process.cwd(), ".env");
+const ENV_PATH = path.join(bridgeHome, ".env");
 
 /** 就地更新 .env 的某个键，保留其它内容和注释。 */
 function upsertEnv(
   updates: Record<string, string>,
   opts: { onlyIfMissing?: string[] } = {},
 ): void {
+  fs.mkdirSync(bridgeHome, { recursive: true });
   let content = "";
   try {
     content = fs.readFileSync(ENV_PATH, "utf8");
@@ -82,7 +84,8 @@ async function main(): Promise<void> {
 
   // 默认工作目录取桥接器的父目录，而不是桥接器自己 —— 否则 Claude 会在
   // 桥接器的代码里干活，几乎肯定不是你想要的。
-  const defaultWorkspace = path.dirname(process.cwd());
+  const defaultWorkspace =
+    bridgeHome === process.cwd() ? path.dirname(process.cwd()) : process.cwd();
 
   upsertEnv(
     {
@@ -95,7 +98,7 @@ async function main(): Promise<void> {
     { onlyIfMissing: ["BRIDGE_WORKSPACE_ROOT", "FEISHU_ALLOW_FROM"] },
   );
 
-  console.log("\n✅ 应用已创建，凭证已写入 .env");
+  console.log(`\n✅ 应用已创建，凭证已写入 ${ENV_PATH}`);
   console.log(`   App ID：${appId}`);
   console.log(`   域：${domain}`);
   console.log(`   工作目录：${defaultWorkspace}`);

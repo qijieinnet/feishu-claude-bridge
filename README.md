@@ -16,17 +16,31 @@
 - **模型热切**：`/model` 弹卡片选，列表由 SDK 实时提供，不写死
 - **正在输入**：收到消息立刻给你那条消息贴 `Typing` 表情，干完自动撤掉
 
-## 快速开始
+## 安装
 
 需要 Node ≥ 20，以及本机已登录的 Claude Code。
+
+一条命令装好：
+
+```bash
+npm i -g github:qijieinnet/feishu-claude-bridge
+```
+
+不想全局安装也可以直接跑，不留任何东西：
+
+```bash
+npx github:qijieinnet/feishu-claude-bridge setup
+```
+
+## 快速开始
 
 ### 1. 扫码创建飞书应用
 
 ```bash
-npm install && npm run setup
+feishu-claude-bridge setup
 ```
 
-终端打印二维码，用飞书 App 扫，在手机上选**新建**或**已有**机器人并确认。凭证会自动写入 `.env`。
+终端打印二维码，用飞书 App 扫，在手机上选**新建**或**已有**机器人并确认。App ID、App Secret、以及**你自己的 open_id** 会自动写进 `~/.feishu-claude-bridge/.env` —— 不用去开发者后台抄任何东西。
 
 > 走的是飞书 accounts 域的 OAuth device-code 流程（`archetype=PersonalAgent`）。租户在 Lark 侧时自动切到 larksuite 域。
 
@@ -35,7 +49,7 @@ npm install && npm run setup
 ### 2. 体检
 
 ```bash
-npm run doctor
+feishu-claude-bridge doctor
 ```
 
 依次检查配置、飞书连通性、Claude 认证，每项给明确结论和修复步骤，而不是一堆堆栈：
@@ -54,16 +68,20 @@ npm run doctor
   1) npm i -g @anthropic-ai/claude-code
   2) claude          # 然后用 /login 登录
   3) claude -p "回复 OK"   # 验证认证是否恢复
-  4) 重启桥接器：npm start
+  4) 重启桥接器
 ```
 
 ### 3. 启动
 
 ```bash
-npm start
+feishu-claude-bridge
 ```
 
 私聊直接说话，群里 @ 机器人。
+
+> 命令有个短别名 `fcb`，`fcb doctor`、`fcb start` 都行。
+> 配置和状态都在 `~/.feishu-claude-bridge/`，可用 `BRIDGE_HOME` 覆盖。
+> 在仓库目录里跑时，如果当前目录有 `.env` 就优先用它（开发模式）。
 
 ## 别人想用：终端批准
 
@@ -73,15 +91,15 @@ npm start
 [配对] 新的接入请求：ou_xxxxxxxx
 [配对] 批准请在另一个终端运行：
 
-    npm run pair -- approve MM5965JU
+    feishu-claude-bridge pair approve MM5965JU
 ```
 
 批准后桥接器会主动在飞书上告诉对方「已获授权」。
 
 ```bash
-npm run pair -- list              # 看谁在等
-npm run pair -- approve <CODE>    # 批准
-npm run pair -- revoke <open_id>  # 撤销
+feishu-claude-bridge pair list              # 看谁在等
+feishu-claude-bridge pair approve <CODE>    # 批准
+feishu-claude-bridge pair revoke <open_id>  # 撤销
 ```
 
 配对码 1 小时过期；同一个人在有效期内重复发消息不会反复生成新码；同时最多挂 3 个待批请求，防刷屏。
@@ -110,6 +128,7 @@ npm run pair -- revoke <open_id>  # 撤销
 | `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | `npm run setup` 自动写入 |
 | `FEISHU_ALLOW_FROM` | owner 名单（open_id，逗号分隔）。空且无配对用户 = 谁都不能用 |
 | `BRIDGE_WORKSPACE_ROOT` | 工作目录根，Claude 只在这里及其子目录活动 |
+| `BRIDGE_HOME` | 配置与状态目录，默认 `~/.feishu-claude-bridge` |
 | `BRIDGE_SESSION_TTL_MS` | 会话闲置多久作废，默认 12 小时 |
 | `BRIDGE_APPROVAL_TIMEOUT_MS` | 审批等待超时，默认 30 分钟，超时按拒绝处理 |
 | `BRIDGE_DEFAULT_MODEL` | 默认模型，留空用 Claude Code 默认 |
@@ -145,6 +164,7 @@ npm run pair -- revoke <open_id>  # 撤销
 ## 结构
 
 ```
+bin/cli.js              统一命令入口（setup / start / pair / doctor）
 src/
   index.ts              入口：事件分发、会话管理、审批桥接
   config.ts             配置加载与校验、白名单、路径限制
