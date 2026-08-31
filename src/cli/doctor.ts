@@ -1,10 +1,11 @@
-// `npm run doctor`：一次性体检，把「能不能跑」拆成几条明确的结论。
+// 一次性体检，把「能不能跑」拆成几条明确的结论：`fcb doctor`。
 import path from "node:path";
 // 只为了副作用：从 ~/.feishu-claude-bridge/.env 加载配置。
 // 用 dotenv/config 会读 cwd 下的 .env —— 全局安装后基本读不到。
 import { envPath } from "../home.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { diagnose } from "../claude/errors.js";
+import { cliCommand } from "../cli-hint.js";
 
 const ok = (msg: string) => console.log(`  ✅ ${msg}`);
 const bad = (msg: string) => console.log(`  ❌ ${msg}`);
@@ -30,7 +31,7 @@ function checkEnv(): boolean {
   ok(`飞书应用 ${appId}`);
 
   if (allowFrom.length === 0) {
-    warn("owner 名单为空，只有经 `npm run pair -- approve` 批准的人能用");
+    warn(`owner 名单为空，只有经 \`${cliCommand("pair approve")}\` 批准的人能用`);
   } else {
     ok(`owner ${allowFrom.length} 人`);
   }

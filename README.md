@@ -8,7 +8,7 @@
 
 ## 特性
 
-- **扫码接入**：`npm run setup` 扫个码，App ID / Secret / 你的 open_id 自动写进 `.env`，不用去开发者后台抄任何东西
+- **扫码接入**：`fcb setup` 扫个码，App ID / Secret / 你的 open_id 自动写进 `.env`，不用去开发者后台抄任何东西
 - **会话自动延续**：默认接着上次聊，进程重启也能接上；闲置 12 小时才作废并自动开新的
 - **过程与回复分离**：思考和工具调用实时刷在过程卡里，**完成后自动折叠成一行**；最终回复单独一张极简卡片
 - **卡片授权**：未预批的操作弹卡片，三档 —— 允许一次 / 总是允许 / 拒绝；「总是允许」会记住同类操作
@@ -139,6 +139,7 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 |---|---|
 | `/new [模型]` | 立即开一条新会话，可顺带指定模型 |
 | `/fork` | 从当前会话分叉，原会话保留 |
+| `/sessions` | 列出当前目录下最近的历史会话，点按钮直接恢复 |
 | `/resume <sessionId>` | 恢复指定会话 |
 | `/model [名称]` | 不带参数弹模型选择卡片；带参数直接切换 |
 | `/stop` | 中断当前执行 |
@@ -152,7 +153,7 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 
 | 变量 | 说明 |
 |---|---|
-| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | `npm run setup` 自动写入 |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | `fcb setup` 自动写入 |
 | `FEISHU_ALLOW_FROM` | owner 名单（open_id，逗号分隔）。空且无配对用户 = 谁都不能用 |
 | `BRIDGE_WORKSPACE_ROOT` | 工作目录根，Claude 只在这里及其子目录活动 |
 | `BRIDGE_HOME` | 配置与状态目录，默认 `~/.feishu-claude-bridge` |
@@ -199,18 +200,20 @@ src/
   store.ts              飞书会话 ↔ Claude sessionId 映射持久化
   pairing.ts            配对码的生成、批准、撤销
   dedup.ts              事件去重（消息与卡片回调共用）
+  cli-hint.ts           提示命令时按安装方式选 fcb 还是 npm run
   feishu/
     client.ts           发消息、发卡片、更新卡片、表情回复
-    cards.ts            卡片构造（审批 / 模型 / 过程 / 回复）
+    cards.ts            卡片构造（审批 / 模型 / 历史会话 / 过程 / 回复）
     envelope.ts         交互信封的构造与校验
     turn-stream.ts      一轮输出的编排：过程卡 + 最终回复，全程串行
   claude/
     session.ts          常驻 query、流式输入、模型与中断控制
+    history.ts          读 ~/.claude/projects 下的历史会话记录
     approvals.ts        审批 pending 表、超时、allow-always 落盘
     errors.ts           错误分类与人话提示
   setup/
     register.ts         飞书应用注册（OAuth device-code）
-    cli.ts              npm run setup
+    cli.ts              fcb setup：扫码注册流程的命令行外壳
   cli/
     pair.ts             配对管理
     doctor.ts           体检

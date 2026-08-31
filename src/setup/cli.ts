@@ -1,4 +1,4 @@
-// `npm run setup`：扫码创建飞书应用，自动写入 .env。
+// 扫码创建飞书应用，自动写入 .env：`fcb setup`（源码目录里是 `npm run setup`）。
 import fs from "node:fs";
 import path from "node:path";
 import { bridgeHome, envPath } from "../home.js";
@@ -8,6 +8,7 @@ import {
   pollRegistration,
   printQrCode,
 } from "./register.js";
+import { cliCommand } from "../cli-hint.js";
 
 /** 就地更新 .env 的某个键，保留其它内容和注释。 */
 function upsertEnv(
@@ -69,7 +70,7 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-fallthrough
     case "expired":
     case "timeout":
-      console.error("\n二维码已过期，请重新运行 npm run setup。");
+      console.error(`\n二维码已过期，请重新运行 ${cliCommand("setup")}。`);
       process.exit(1);
     // eslint-disable-next-line no-fallthrough
     case "error":
