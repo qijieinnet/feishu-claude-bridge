@@ -83,6 +83,33 @@ feishu-claude-bridge
 > 配置和状态都在 `~/.feishu-claude-bridge/`，可用 `BRIDGE_HOME` 覆盖。
 > 在仓库目录里跑时，如果当前目录有 `.env` 就优先用它（开发模式）。
 
+## 开机自启
+
+全局安装本身**不会**开机运行 —— 它只是把命令装进 PATH，关掉终端桥接器就停了。要让它常驻：
+
+```bash
+feishu-claude-bridge service install
+```
+
+macOS 用 LaunchAgent，Linux 用 systemd user service，都是**用户级**的，不需要 sudo，也不碰系统全局配置。装完立即启动，之后开机自动拉起，崩溃会自动重启。
+
+```bash
+feishu-claude-bridge service status      # 看是否在运行
+feishu-claude-bridge service uninstall   # 取消自启
+```
+
+日志在 `~/.feishu-claude-bridge/logs/out.log`（配对码、审批提示都会打在这里，实时看用 `tail -f`）。
+
+> 一个容易踩的坑：launchd 和 systemd 的默认 `PATH` 极窄，会导致服务起来了却找不到 `claude`。
+> 安装时会把你当前 shell 的 `PATH` 一并写进配置，避免这个问题。
+> 如果之后你换了 Node 或 Claude Code 的安装位置，重新跑一次 `service install` 即可。
+
+Linux 上如果希望**未登录时也运行**，还需要：
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
 ## 别人想用：终端批准
 
 陌生人给机器人发消息时，消息**不会被处理**，他只会收到一个 8 位配对码，同时你的终端打印：
@@ -164,7 +191,7 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 ## 结构
 
 ```
-bin/cli.js              统一命令入口（setup / start / pair / doctor）
+bin/cli.js              统一命令入口（setup / start / pair / doctor / service）
 src/
   index.ts              入口：事件分发、会话管理、审批桥接
   config.ts             配置加载与校验、白名单、路径限制
@@ -185,8 +212,9 @@ src/
     register.ts         飞书应用注册（OAuth device-code）
     cli.ts              npm run setup
   cli/
-    pair.ts             npm run pair
-    doctor.ts           npm run doctor
+    pair.ts             配对管理
+    doctor.ts           体检
+    service.ts          开机自启注册（launchd / systemd）
 ```
 
 ## 已知限制
