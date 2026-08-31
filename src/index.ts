@@ -463,6 +463,23 @@ async function handleMessage(data: any): Promise<void> {
 // ---------- 卡片回调 ----------
 
 /**
+ * 回调的响应体。
+ *
+ * 这是让卡片「点完就变样」的唯一可靠途径：飞书客户端会拿响应里的 card
+ * 重新渲染这条消息，响应里没有 card 就把它本地那份旧卡片渲染回去
+ * —— 表现就是审批卡闪一下变成已授权，然后又变回可点的样子。
+ * 光调更新卡片接口是不够的，会被这次回渲盖掉。
+ *
+ * 另有一条硬约束：必须 3 秒内响应，超时报 200341。所以耗时的活儿
+ * （dispose 要等当前这轮跑完、setModel 要先把 query 拉起来）一律先应答
+ * 再后台做，完成后照常在会话里回一句。
+ */
+type CardResponse = {
+  toast?: { type: "info" | "success" | "error" | "warning"; content: string };
+  card?: { type: "raw"; data: unknown };
+};
+
+/**
  * 卡片作用在哪条会话上。
  *
  * 优先用信封里带的键：回调事件里没有 thread_id，现推只能推出 chat 级别的键，
@@ -472,7 +489,7 @@ function sessionKeyOf(envelope: CardEnvelope, chatId: string): string {
   return ("k" in envelope && envelope.k) || sessionKey({ chatId });
 }
 
-async function handleCardAction(data: any): Promise<void> {
+async function handleCardAction(data: any): Promise<CardResponse> {
   const operatorOpenId: string | undefined = data?.operator?.open_id;
   const chatId: string | undefined = data?.context?.open_chat_id ?? data?.context?.chat_id;
 
@@ -482,7 +499,7 @@ async function handleCardAction(data: any): Promise<void> {
     data?.token ??
     data?.event_id ??
     `${operatorOpenId}:${data?.context?.open_message_id}:${JSON.stringify(data?.action?.value)}`;
-  if (isDuplicate(`card:${dedupKey}`)) return;
+  if (isDuplicate(`card:${dedupKey}`)) return {};
 
   const decoded = decodeEnvelope({
     value: data?.action?.value,
@@ -494,8 +511,7 @@ async function handleCardAction(data: any): Promise<void> {
   });
 
   if (!decoded.ok) {
-    if (chatId) await sendText(chatId, DECODE_FAILURE_TEXT[decoded.reason]);
-    return;
+    return { toast: { type: "error", content: DECODE_FAILURE_TEXT[decoded.reason] } };
   }
 
   const envelope: CardEnvelope = decoded.envelope;
@@ -505,53 +521,60 @@ async function handleCardAction(data: any): Promise<void> {
     if (!entry) {
       // 走到这里说明不是重投（重投已被去重挡掉），而是请求真的不在了：
       // 已超时、已被别的入口处理，或桥接器重启过（pending 表是内存态）。
-      if (chatId) {
-        await sendText(
-          chatId,
-          `这条授权请求已经失效了（超时、已处理，或桥接器重启过）。\n请重新发一次你的需求。`,
-        );
-      }
-      return;
+      return {
+        toast: {
+          type: "error",
+          content: "这条授权请求已失效（超时、已处理，或桥接器重启过），请重新发一次你的需求。",
+        },
+      };
     }
+
+    const resolved = approvalResolvedCard({
+      requestId: entry.requestId,
+      toolName: entry.toolName,
+      decision: envelope.d,
+      by: "已由授权人处理",
+    });
+
+    // 更新接口是兜底：把服务端存的那份也改掉（超时和 /approve 两条路径只有它）。
+    // 不 await —— 授权已经生效了，不能为了一个网络往返把 3 秒预算耗在这儿。
     if (entry.messageId) {
-      const updated = await updateCard(
-        entry.messageId,
-        approvalResolvedCard({
-          requestId: entry.requestId,
-          toolName: entry.toolName,
-          decision: envelope.d,
-          by: "已由授权人处理",
-        }),
-      );
-      if (!updated) {
-        console.warn(`[审批] ${entry.requestId} 已生效，但卡片未能改成已授权状态`);
-      }
+      void updateCard(entry.messageId, resolved).then((updated) => {
+        if (!updated) console.warn(`[审批] ${entry.requestId} 已生效，但卡片未能改成已授权状态`);
+      });
     } else {
       // 之前这里是静默跳过，卡片停在待授权状态却毫无线索
       console.warn(`[审批] ${entry.requestId} 没有 messageId，无法更新卡片状态`);
     }
-    return;
+
+    return {
+      toast: { type: "success", content: envelope.d === "deny" ? "已拒绝" : "已允许" },
+      card: { type: "raw", data: resolved },
+    };
   }
 
   if (envelope.a === "resume" && chatId) {
-    await resumeSession({
+    void resumeSession({
       key: sessionKeyOf(envelope, chatId),
       chatId,
       operatorOpenId: operatorOpenId!,
       sessionId: envelope.s,
-    });
-    return;
+    }).catch((err) => console.error("[卡片] 恢复会话失败:", err));
+    return { toast: { type: "info", content: "正在恢复该会话…" } };
   }
 
   if (envelope.a === "model" && chatId) {
     const key = sessionKeyOf(envelope, chatId);
-    const session = getOrCreateSession({ key, chatId, operatorOpenId: operatorOpenId! });
-    await session.setModel(envelope.m);
-    updateBinding(key, { model: envelope.m });
-    await sendText(chatId, `模型已切换为 ${envelope.m}。`);
-    return;
+    void (async () => {
+      const session = getOrCreateSession({ key, chatId, operatorOpenId: operatorOpenId! });
+      await session.setModel(envelope.m);
+      updateBinding(key, { model: envelope.m });
+      await sendText(chatId, `模型已切换为 ${envelope.m}。`);
+    })().catch((err) => console.error("[卡片] 切换模型失败:", err));
+    return { toast: { type: "success", content: `正在切换到 ${envelope.m}` } };
   }
 
+  return {};
 }
 
 // ---------- 启动 ----------
@@ -586,11 +609,11 @@ function main(): void {
     },
     "card.action.trigger": async (data: any) => {
       try {
-        await handleCardAction(data);
+        return await handleCardAction(data);
       } catch (err) {
         console.error("[feishu] 处理卡片回调出错:", err);
+        return { toast: { type: "error", content: "处理失败，请看桥接器日志。" } };
       }
-      return {};
     },
   } as any);
 
