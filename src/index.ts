@@ -488,7 +488,9 @@ async function handleCardAction(data: any): Promise<void> {
     value: data?.action?.value,
     operatorOpenId,
     chatId,
-    isAllowed: isAllowedSender,
+    // 必须和消息走同一套判断：只认 allowFrom 的话，配对进来的人能聊天
+    // 却点不动任何按钮，每次都被告知「你不在授权名单里」。
+    isAllowed: isAuthorized,
   });
 
   if (!decoded.ok) {
