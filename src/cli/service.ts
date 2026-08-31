@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { bridgeHome } from "../config.js";
+import { bridgeHome, envPath } from "../home.js";
 
 const LABEL = "com.feishu-claude-bridge";
 const logDir = path.join(bridgeHome, "logs");
@@ -93,6 +93,12 @@ function run(command: string, args: string[]): void {
 
 function install(): void {
   fs.mkdirSync(logDir, { recursive: true });
+
+  // 没配置也照样装 —— 但要说清楚，否则服务会起来即崩，日志还在别处。
+  if (!fs.existsSync(envPath)) {
+    console.warn(`⚠️  还没有配置（${envPath} 不存在）`);
+    console.warn("   服务会一直重启失败，先跑：feishu-claude-bridge setup\n");
+  }
 
   if (process.platform === "darwin") {
     fs.mkdirSync(path.dirname(plistPath), { recursive: true });

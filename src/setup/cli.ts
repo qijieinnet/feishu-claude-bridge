@@ -1,15 +1,13 @@
 // `npm run setup`：扫码创建飞书应用，自动写入 .env。
 import fs from "node:fs";
 import path from "node:path";
-import { bridgeHome } from "../config.js";
+import { bridgeHome, envPath } from "../home.js";
 import {
   beginRegistration,
   initRegistration,
   pollRegistration,
   printQrCode,
 } from "./register.js";
-
-const ENV_PATH = path.join(bridgeHome, ".env");
 
 /** 就地更新 .env 的某个键，保留其它内容和注释。 */
 function upsertEnv(
@@ -19,7 +17,7 @@ function upsertEnv(
   fs.mkdirSync(bridgeHome, { recursive: true });
   let content = "";
   try {
-    content = fs.readFileSync(ENV_PATH, "utf8");
+    content = fs.readFileSync(envPath, "utf8");
   } catch {
     content = "";
   }
@@ -35,7 +33,7 @@ function upsertEnv(
       : `${content.trimEnd()}\n${line}\n`;
   }
 
-  fs.writeFileSync(ENV_PATH, content.trimStart(), { mode: 0o600 });
+  fs.writeFileSync(envPath, content.trimStart(), { mode: 0o600 });
 }
 
 async function main(): Promise<void> {
@@ -98,7 +96,7 @@ async function main(): Promise<void> {
     { onlyIfMissing: ["BRIDGE_WORKSPACE_ROOT", "FEISHU_ALLOW_FROM"] },
   );
 
-  console.log(`\n✅ 应用已创建，凭证已写入 ${ENV_PATH}`);
+  console.log(`\n✅ 应用已创建，凭证已写入 ${envPath}`);
   console.log(`   App ID：${appId}`);
   console.log(`   域：${domain}`);
   console.log(`   工作目录：${defaultWorkspace}`);

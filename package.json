@@ -1,6 +1,6 @@
 {
   "name": "feishu-claude-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "把飞书机器人桥接到本机 Claude Code：聊天驱动、卡片审批、会话与模型切换",
   "scripts": {

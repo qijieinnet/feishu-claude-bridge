@@ -44,4 +44,12 @@ if (!target) {
 process.argv = [process.argv[0], process.argv[1], ...rest];
 
 register();
-await import(new URL(target, import.meta.url).href);
+try {
+  await import(new URL(target, import.meta.url).href);
+} catch (err) {
+  // 配置缺失之类的问题，用户要看的是一句话怎么修，不是一屏 ESM 调用栈。
+  // 真要排查时 BRIDGE_DEBUG=1 把原始栈打出来。
+  if (process.env.BRIDGE_DEBUG) throw err;
+  process.stderr.write(`${err instanceof Error ? err.message : err}\n`);
+  process.exit(1);
+}

@@ -1,6 +1,8 @@
 // `npm run doctor`：一次性体检，把「能不能跑」拆成几条明确的结论。
-import "dotenv/config";
 import path from "node:path";
+// 只为了副作用：从 ~/.feishu-claude-bridge/.env 加载配置。
+// 用 dotenv/config 会读 cwd 下的 .env —— 全局安装后基本读不到。
+import { envPath } from "../home.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { diagnose } from "../claude/errors.js";
 
@@ -21,7 +23,7 @@ function checkEnv(): boolean {
   const workspace = process.env.BRIDGE_WORKSPACE_ROOT?.trim();
 
   if (!appId || !appSecret) {
-    bad("缺少飞书凭证，先跑：npm run setup");
+    bad(`缺少飞书凭证（${envPath}），先跑：feishu-claude-bridge setup`);
     failures++;
     return false;
   }

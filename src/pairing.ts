@@ -3,7 +3,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { config } from "./config.js";
+import { dataDir } from "./home.js";
 
 /** 去掉 0/O/1/I，避免念错抄错 */
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -25,7 +25,7 @@ type PairStore = {
   approved: string[];
 };
 
-const storePath = path.join(config.dataDir, "pairing.json");
+const storePath = path.join(dataDir, "pairing.json");
 
 function read(): PairStore {
   try {
@@ -37,7 +37,7 @@ function read(): PairStore {
 }
 
 function write(store: PairStore): void {
-  fs.mkdirSync(config.dataDir, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(storePath, JSON.stringify(store, null, 2), { mode: 0o600 });
 }
 
@@ -136,7 +136,7 @@ export function listApproved(): string[] {
 /** 监听配对文件变化，用于批准后立刻通知等待中的人。 */
 export function watchPairing(onChange: () => void): fs.FSWatcher | undefined {
   try {
-    fs.mkdirSync(config.dataDir, { recursive: true });
+    fs.mkdirSync(dataDir, { recursive: true });
     if (!fs.existsSync(storePath)) write({ pending: [], approved: [] });
     return fs.watch(storePath, { persistent: false }, () => onChange());
   } catch {
