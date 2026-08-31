@@ -12,9 +12,12 @@ export const ENVELOPE_VERSION = "fcb1";
 
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+// k 是会话键：卡片回调里拿不到 thread_id，不带上它就只能退回 chat 级别的键，
+// 在话题里点按钮会操作到群本身的会话上。凡是「作用于某条会话」的动作都得带。
 export type EnvelopeAction =
   | { a: "approval"; r: string; d: ApprovalDecision }
-  | { a: "model"; m: string };
+  | { a: "model"; m: string; k: string }
+  | { a: "resume"; s: string; k: string };
 
 export type CardEnvelope = EnvelopeAction & {
   oc: typeof ENVELOPE_VERSION;

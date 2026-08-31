@@ -8,6 +8,7 @@ export type ParsedCommand =
   | { kind: "new"; model?: string }
   | { kind: "fork" }
   | { kind: "resume"; sessionId: string }
+  | { kind: "sessions" }
   | { kind: "model"; model?: string }
   | { kind: "stop" }
   | { kind: "cd"; dir: string }
@@ -36,6 +37,8 @@ export function parseCommand(raw: string): ParsedCommand {
       return { kind: "fork" };
     case "resume":
       return arg ? { kind: "resume", sessionId: arg } : { kind: "chat", text };
+    case "sessions":
+      return { kind: "sessions" };
     case "model":
       return { kind: "model", ...(arg ? { model: arg } : {}) };
     case "stop":
@@ -68,6 +71,7 @@ export const HELP_TEXT = [
   "",
   "`/new [模型]` 立即开一条新会话，可顺带指定模型",
   "`/fork` 从当前会话分叉，原会话保留",
+  "`/sessions` 列出本目录下的历史会话，点按钮直接恢复",
   "`/resume <sessionId>` 恢复指定会话",
   "`/model [名称]` 不带参数弹模型选择卡片；带参数直接切换",
   "`/stop` 中断当前执行",

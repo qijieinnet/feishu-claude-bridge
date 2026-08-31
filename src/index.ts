@@ -15,6 +15,7 @@ import {
   modelPickerCard,
   progressCard,
   replyCard,
+  sessionListCard,
 } from "./feishu/cards.js";
 import { decodeEnvelope, DECODE_FAILURE_TEXT, type CardEnvelope } from "./feishu/envelope.js";
 import { TurnStream } from "./feishu/turn-stream.js";
@@ -27,6 +28,7 @@ import {
   signatureOf,
 } from "./claude/approvals.js";
 import { ClaudeSession } from "./claude/session.js";
+import { listSessions, sessionExists } from "./claude/history.js";
 import {
   getBinding,
   isSessionExpired,
@@ -39,6 +41,7 @@ import { HELP_TEXT, parseCommand } from "./commands.js";
 import { isDuplicate } from "./dedup.js";
 import { announceOnce, diagnose } from "./claude/errors.js";
 import { isPaired, listApproved, requestPairing, watchPairing } from "./pairing.js";
+import { cliCommand } from "./cli-hint.js";
 
 // ---------- 会话管理 ----------
 
@@ -181,6 +184,41 @@ function getOrCreateSession(params: {
   return session;
 }
 
+/**
+ * 切到指定的历史会话。
+ *
+ * 先校验记录确实存在：SDK 的 resume 要等下一条消息真正发出去才会报错，
+ * 不校验的话用户会收到一句「已恢复」，然后在下一轮莫名其妙地失败。
+ * 绑定也在这里立刻写回，否则 /status 显示的还是旧会话
+ * —— onSessionId 要等第一条消息才回调。
+ */
+async function resumeSession(params: {
+  key: string;
+  chatId: string;
+  operatorOpenId: string;
+  sessionId: string;
+}): Promise<void> {
+  const binding = getBinding(params.key);
+  if (!sessionExists(binding.cwd, params.sessionId)) {
+    await sendText(
+      params.chatId,
+      `在 ${binding.cwd} 下找不到会话 ${params.sessionId}。\n发 /sessions 看看有哪些可恢复的。`,
+    );
+    return;
+  }
+
+  await live.get(params.key)?.session.dispose();
+  live.delete(params.key);
+  updateBinding(params.key, { sessionId: params.sessionId });
+  getOrCreateSession({
+    key: params.key,
+    chatId: params.chatId,
+    operatorOpenId: params.operatorOpenId,
+    resumeSessionId: params.sessionId,
+  });
+  await sendText(params.chatId, `已恢复会话 ${params.sessionId}，直接接着说就行。`);
+}
+
 /** 撤掉某个会话当前的「正在输入」表情。 */
 function clearTyping(key: string): void {
   const typing = typingByKey.get(key);
@@ -225,14 +263,15 @@ async function handleUnknownSender(params: {
   const { code } = outcome.request;
 
   if (outcome.kind === "created") {
+    const approveCmd = cliCommand(`pair approve ${code}`);
     console.log("\n" + "=".repeat(52));
     console.log(`[配对] 新的接入请求：${openId}`);
     console.log(`[配对] 批准请在另一个终端运行：`);
-    console.log(`\n    npm run pair -- approve ${code}\n`);
+    console.log(`\n    ${approveCmd}\n`);
     console.log("=".repeat(52) + "\n");
     await sendText(
       chatId,
-      `你还没有被授权使用这台机器。\n\n配对码：${code}\n\n请让机器主人在终端运行：\nnpm run pair -- approve ${code}\n\n批准后我会通知你。`,
+      `你还没有被授权使用这台机器。\n\n配对码：${code}\n\n请让机器主人在终端运行：\n${approveCmd}\n\n批准后我会通知你。`,
     );
   }
 }
@@ -339,11 +378,28 @@ async function handleMessage(data: any): Promise<void> {
       return;
     }
 
+    case "sessions": {
+      const binding = getBinding(key);
+      const sessions = await listSessions(binding.cwd);
+      if (sessions.length === 0) {
+        await sendText(chatId, `${binding.cwd} 下还没有历史会话。`);
+        return;
+      }
+      await sendCard(
+        chatId,
+        sessionListCard({
+          sessions,
+          ...(binding.sessionId ? { current: binding.sessionId } : {}),
+          cwd: binding.cwd,
+          sessionKey: key,
+          ctx: cardCtx(chatId, operatorOpenId),
+        }),
+      );
+      return;
+    }
+
     case "resume": {
-      await live.get(key)?.session.dispose();
-      live.delete(key);
-      getOrCreateSession({ key, chatId, operatorOpenId, resumeSessionId: command.sessionId });
-      await sendText(chatId, "已恢复。");
+      await resumeSession({ key, chatId, operatorOpenId, sessionId: command.sessionId });
       return;
     }
 
@@ -360,7 +416,8 @@ async function handleMessage(data: any): Promise<void> {
         chatId,
         modelPickerCard({
           models,
-          current: getBinding(key).model,
+          ...(getBinding(key).model ? { current: getBinding(key).model } : {}),
+          sessionKey: key,
           ctx: cardCtx(chatId, operatorOpenId),
         }),
       );
@@ -405,6 +462,16 @@ async function handleMessage(data: any): Promise<void> {
 
 // ---------- 卡片回调 ----------
 
+/**
+ * 卡片作用在哪条会话上。
+ *
+ * 优先用信封里带的键：回调事件里没有 thread_id，现推只能推出 chat 级别的键，
+ * 在话题里点按钮就会操作到群本身的会话上。老卡片没带 k，退回现推的旧行为。
+ */
+function sessionKeyOf(envelope: CardEnvelope, chatId: string): string {
+  return ("k" in envelope && envelope.k) || sessionKey({ chatId });
+}
+
 async function handleCardAction(data: any): Promise<void> {
   const operatorOpenId: string | undefined = data?.operator?.open_id;
   const chatId: string | undefined = data?.context?.open_chat_id ?? data?.context?.chat_id;
@@ -430,7 +497,6 @@ async function handleCardAction(data: any): Promise<void> {
   }
 
   const envelope: CardEnvelope = decoded.envelope;
-  const key = sessionKey({ chatId: chatId! });
 
   if (envelope.a === "approval") {
     const entry = resolveApproval(envelope.r, envelope.d);
@@ -465,7 +531,18 @@ async function handleCardAction(data: any): Promise<void> {
     return;
   }
 
+  if (envelope.a === "resume" && chatId) {
+    await resumeSession({
+      key: sessionKeyOf(envelope, chatId),
+      chatId,
+      operatorOpenId: operatorOpenId!,
+      sessionId: envelope.s,
+    });
+    return;
+  }
+
   if (envelope.a === "model" && chatId) {
+    const key = sessionKeyOf(envelope, chatId);
     const session = getOrCreateSession({ key, chatId, operatorOpenId: operatorOpenId! });
     await session.setModel(envelope.m);
     updateBinding(key, { model: envelope.m });

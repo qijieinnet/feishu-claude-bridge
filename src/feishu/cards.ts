@@ -122,6 +122,7 @@ export function approvalResolvedCard(params: {
 export function modelPickerCard(params: {
   models: { model: string; displayName?: string; description?: string }[];
   current?: string;
+  sessionKey: string;
   ctx: Ctx;
 }) {
   const buttons = params.models
@@ -129,7 +130,7 @@ export function modelPickerCard(params: {
     .map((m) =>
       button(
         `${m.displayName ?? m.model}${m.model === params.current ? " ✅" : ""}`,
-        { a: "model", m: m.model },
+        { a: "model", m: m.model, k: params.sessionKey },
         params.ctx,
       ),
     );
@@ -206,4 +207,62 @@ export function replyCard(text: string) {
     config: baseConfig,
     body: { elements: [{ tag: "markdown", content: clip(text, 4000) }] },
   };
+}
+
+/**
+ * 历史会话卡：列出当前目录下最近的会话，点按钮直接 resume。
+ *
+ * 会话键随信封一起带走 —— 卡片回调里没有 thread_id，不带就没法区分
+ * 「群里的话题会话」和「群本身的会话」。
+ */
+export function sessionListCard(params: {
+  sessions: { sessionId: string; title: string; updatedAt: number }[];
+  current?: string;
+  cwd: string;
+  sessionKey: string;
+  ctx: Ctx;
+}) {
+  const elements: unknown[] = [
+    { tag: "markdown", content: `目录 \`${params.cwd}\`` },
+  ];
+
+  params.sessions.forEach((entry, index) => {
+    const isCurrent = entry.sessionId === params.current;
+    elements.push({ tag: "hr" });
+    elements.push({
+      tag: "markdown",
+      content:
+        `**${index + 1}. ${entry.title}**${isCurrent ? "　✅ 当前" : ""}\n` +
+        `\`${entry.sessionId}\`　${relativeTime(entry.updatedAt)}`,
+    });
+    if (!isCurrent) {
+      elements.push(
+        buttonRow([
+          button(
+            "恢复这条",
+            { a: "resume", s: entry.sessionId, k: params.sessionKey },
+            params.ctx,
+          ),
+        ]),
+      );
+    }
+  });
+
+  return {
+    schema: "2.0",
+    config: baseConfig,
+    header: { title: { tag: "plain_text", content: "历史会话" }, template: "blue" },
+    body: { elements },
+  };
+}
+
+function relativeTime(ts: number, now = Date.now()): string {
+  const minutes = Math.floor((now - ts) / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} 天前`;
+  return new Date(ts).toLocaleDateString("zh-CN");
 }
