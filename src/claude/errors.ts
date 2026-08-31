@@ -9,6 +9,7 @@ export type DiagnosisKind =
   | "cli_missing"
   | "rate_limit"
   | "billing"
+  | "turn_aborted"
   | "unknown";
 
 export type Diagnosis = {
@@ -80,6 +81,27 @@ export function diagnose(err: unknown): Diagnosis {
       kind: "rate_limit",
       chatMessage: "Claude 的用量已达上限，请稍后再试。",
       consoleHint: "已达用量上限。等配额恢复，或换用额度更充足的账号 / API key。",
+      fatal: false,
+    };
+  }
+
+  // CLI 在一轮结束时发现 transcript 收尾不自洽（典型形态：最后一条是用户侧
+  // 消息，而助手那边还停在 tool_use），就判为 error_during_execution。
+  // 也就是工具调用循环跑到一半被打断了 —— /stop、审批超时、CLI 进程挂掉都算。
+  // SDK 会把它包成 Error("Claude Code returned an error result: …") 抛出来。
+  if (
+    text.includes("error_during_execution") ||
+    text.includes("returned an error result")
+  ) {
+    return {
+      kind: "turn_aborted",
+      chatMessage:
+        "这一轮没能正常收尾，多半是工具跑到一半被打断了（/stop、审批超时，或 Claude Code 自己退出了）。\n上下文没丢，把刚才的需求再说一遍就行。",
+      consoleHint:
+        "一轮执行被中途打断（error_during_execution）。\n" +
+        "常见原因：用户发了 /stop、审批超时按拒绝处理、或 Claude Code 进程退出。\n" +
+        "偶发不用管，下一条消息会带着原 sessionId 重新拉起。\n" +
+        "如果反复出现，去 ~/.claude/projects 下看对应会话的 jsonl 尾部，确认是不是每次都断在同一个工具上。",
       fatal: false,
     };
   }

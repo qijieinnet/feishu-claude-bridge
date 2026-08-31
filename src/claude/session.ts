@@ -74,6 +74,8 @@ export class ClaudeSession {
   private q: Query | null = null;
   private pump: Promise<void> | null = null;
   private sessionId: string | undefined;
+  /** 是否已经拉起过 query。用来区分首次启动和崩溃后的重启。 */
+  private everStarted = false;
 
   constructor(
     private readonly opts: SessionOptions,
@@ -88,6 +90,13 @@ export class ClaudeSession {
   private start(): void {
     if (this.q) return;
 
+    // 重启时要接着最新的会话，而不是构造时那个 —— 否则中途崩一次，
+    // 之后所有对话都被倒回到最初 resume 的那个点上。
+    const resume = this.sessionId ?? this.opts.resumeSessionId;
+    // fork 只在第一次生效：重启再 fork 一次就又分叉一条，刚才那轮白丢。
+    const fork = this.opts.fork && !this.everStarted;
+    this.everStarted = true;
+
     this.q = query({
       prompt: this.queue.stream(),
       options: {
@@ -96,14 +105,26 @@ export class ClaudeSession {
         // 权限流程在到达回调之前就放行了。
         permissionMode: "default",
         ...(this.opts.model ? { model: this.opts.model } : {}),
-        ...(this.opts.resumeSessionId ? { resume: this.opts.resumeSessionId } : {}),
-        ...(this.opts.fork ? { forkSession: true } : {}),
+        ...(resume ? { resume } : {}),
+        ...(fork ? { forkSession: true } : {}),
         canUseTool: async (toolName, input) =>
           this.approvalBridge(toolName, input as Record<string, unknown>),
       },
     });
 
-    this.pump = this.consume().catch((err) => this.events.onError(err));
+    this.pump = this.consume()
+      .catch((err) => this.events.onError(err))
+      .finally(() => {
+        // 走到这里说明 query 真的结束了 —— CLI 进程退出，或流式输入被关掉。
+        // 正常聊天时它是常驻的，一轮结束并不会走到这。
+        //
+        // 不清空的话，上面那句 `if (this.q) return` 会一直以为它还活着，
+        // 之后每条消息都被 push 进一个没有消费者的队列：会话表面还在，
+        // 实际上再也不回话，连"正在输入"都撤不掉。清掉之后，下一条消息
+        // 会带着最新的 sessionId 重新拉起来，上下文不丢。
+        this.q = null;
+        this.pump = null;
+      });
   }
 
   private async consume(): Promise<void> {
