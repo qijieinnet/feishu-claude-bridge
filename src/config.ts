@@ -43,6 +43,11 @@ export const config = {
   approvalTimeoutMs: Number(process.env.BRIDGE_APPROVAL_TIMEOUT_MS ?? 1_800_000),
   /** 会话闲置多久就作废，之后自动开新的。默认 12 小时 */
   sessionTtlMs: Number(process.env.BRIDGE_SESSION_TTL_MS ?? 12 * 60 * 60 * 1000),
+  /**
+   * 长连接掉线多久就主动退出，让守护进程重启。默认 10 分钟，设 0 关掉。
+   * 别设得太短：一次正常重连要一两分钟，短于它会把重连中的连接误杀。
+   */
+  watchdogMs: Number(process.env.BRIDGE_WATCHDOG_MS ?? 10 * 60 * 1000),
   defaultModel: process.env.BRIDGE_DEFAULT_MODEL?.trim() || undefined,
   dataDir,
   home: bridgeHome,

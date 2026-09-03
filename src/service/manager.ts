@@ -77,6 +77,9 @@ function buildSystemdUnit(): string {
   return `[Unit]
 Description=feishu-claude-bridge
 After=network-online.target
+# systemd 默认「10 秒内重启 5 次就永久放弃」，那正是崩溃循环最需要它别放弃的时候。
+# launchd 那边是无条件重启的，这里对齐。
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

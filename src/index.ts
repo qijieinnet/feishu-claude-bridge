@@ -56,6 +56,7 @@ import { isDuplicate } from "./dedup.js";
 import { announceOnce, diagnose } from "./claude/errors.js";
 import { isPaired, listApproved, requestPairing, watchPairing } from "./pairing.js";
 import { cliCommand } from "./cli-hint.js";
+import { exitForRestart, startWatchdog } from "./feishu/watchdog.js";
 
 // ---------- 会话管理 ----------
 
@@ -797,6 +798,14 @@ function main(): void {
     appId: config.feishu.appId,
     appSecret: config.feishu.appSecret,
     loggerLevel: Lark.LoggerLevel.info,
+    // 不设握手超时的话，DNS / 代理 / NAT 卡住时握手会无限期挂着，
+    // 连重连循环都进不去 —— 最难发现的一种卡死。
+    handshakeTimeoutMs: 30_000,
+    onReady: () => console.log("[连接] 长连接已就绪"),
+    onReconnecting: () => console.warn("[连接] 已断开，正在重连…"),
+    onReconnected: () => console.log("[连接] 重连成功"),
+    // 走到这里说明 SDK 已经放弃了。它不会再自己起来，只能整个进程重来。
+    onError: (err) => exitForRestart(`长连接彻底失败：${err.message}`),
   });
 
   const eventDispatcher = new Lark.EventDispatcher({}).register({
@@ -833,8 +842,12 @@ function main(): void {
   });
 
   wsClient.start({ eventDispatcher });
+  startWatchdog(wsClient);
   console.log(`[启动] 已连接飞书长连接。workspace=${config.workspaceRoot}`);
   console.log(`[启动] 授权用户 ${config.allowFrom.length} 人`);
+
+  // 进程退出得留下痕迹：否则「服务怎么自己没了」在日志里毫无线索
+  process.on("exit", (code) => console.log(`[退出] 桥接器结束，退出码 ${code}`));
 }
 
 main();
