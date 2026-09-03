@@ -36,16 +36,58 @@ function uid(): number {
   return process.getuid?.() ?? 501;
 }
 
+/**
+ * 写进服务定义的 PATH。
+ *
+ * 不能只抄当前 shell 的 PATH：装服务时用的是哪个 shell 全凭运气 —— 从 SSH
+ * 非交互会话跑一次 install，PATH 里就没有 ~/.npm-global/bin，而 `claude`
+ * 恰恰装在那儿。服务照样起得来，直到第一次真要调 Claude 才报「找不到」。
+ * 所以把 node 自己所在的目录和 npm 全局 bin 显式并进去。
+ */
+export function servicePath(): string {
+  const parts = [
+    path.dirname(process.execPath),
+    npmGlobalBin(),
+    process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+  ];
+  const seen = new Set<string>();
+  return parts
+    .filter((entry): entry is string => !!entry)
+    .flatMap((entry) => entry.split(":"))
+    .filter((dir) => dir && !seen.has(dir) && (seen.add(dir), true))
+    .join(":");
+}
+
+/**
+ * npm 全局 bin 目录。从入口文件的位置反推，不用 spawn npm：
+ * <prefix>/lib/node_modules/feishu-claude-bridge/bin/cli.js → <prefix>/bin
+ * 从 git 仓库里跑时推出来的是个不存在的目录，会被下面的 existsSync 滤掉。
+ */
+function npmGlobalBin(): string | undefined {
+  const guess = path.resolve(entryPath(), "../../../../../bin");
+  return fs.existsSync(guess) ? guess : undefined;
+}
+
+/** 装完就地验一下服务能不能找到 claude —— 让它在装的时候喊，而不是用的时候哑火。 */
+function warnIfClaudeMissing(pathEnv: string): void {
+  const found = pathEnv
+    .split(":")
+    .some((dir) => dir && fs.existsSync(path.join(dir, "claude")));
+  if (!found) {
+    console.warn("⚠️  服务的 PATH 里找不到 claude，起来之后会报「找不到 Claude Code」。");
+    console.warn("   确认一下 Claude Code 装在哪：command -v claude");
+  }
+}
+
 function escapeXml(value: string): string {
   return value.replace(/[<>&'"]/g, (c) =>
     ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "'": "&apos;", '"': "&quot;" })[c] ?? c,
   );
 }
 
-function buildPlist(): string {
-  // launchd 的默认 PATH 极窄，找不到 node 也找不到 claude。
-  // 把当前 shell 的 PATH 原样带过去，否则服务起来了却报「找不到 Claude Code」。
-  const pathEnv = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+export function buildPlist(): string {
+  // launchd 的默认 PATH 极窄，找不到 node 也找不到 claude
+  const pathEnv = servicePath();
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -72,8 +114,8 @@ function buildPlist(): string {
 `;
 }
 
-function buildSystemdUnit(): string {
-  const pathEnv = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
+export function buildSystemdUnit(): string {
+  const pathEnv = servicePath();
   return `[Unit]
 Description=feishu-claude-bridge
 After=network-online.target
@@ -85,6 +127,10 @@ StartLimitIntervalSec=0
 Type=simple
 ExecStart=${process.execPath} ${entryPath()} start
 WorkingDirectory=${bridgeHome}
+# 不写这两行的话日志只进 journald，而普通用户往往读不到自己的 user unit 日志
+# （配对码、审批提示就此消失）。append: 需要 systemd >= 240，2020 年后的发行版都有。
+StandardOutput=append:${path.join(logDir, "out.log")}
+StandardError=append:${path.join(logDir, "err.log")}
 Environment=PATH=${pathEnv}
 Environment=BRIDGE_HOME=${bridgeHome}
 Restart=always
@@ -181,7 +227,10 @@ export function install(options: { quiet?: boolean } = {}): void {
     fs.mkdirSync(path.dirname(systemdPath), { recursive: true });
     fs.writeFileSync(systemdPath, buildSystemdUnit());
     run("systemctl", ["--user", "daemon-reload"]);
-    run("systemctl", ["--user", "enable", "--now", UNIT]);
+    run("systemctl", ["--user", "enable", UNIT]);
+    // 必须是 restart 而不是 enable --now：--now 只管「没在跑就拉起来」，
+    // 对已经在跑的服务什么都不做 —— 升级完照样跑着旧代码，白升一场。
+    run("systemctl", ["--user", "restart", UNIT]);
     say(`✅ 已注册为开机自启：${systemdPath}`);
     say("   未登录时也要运行的话，执行：sudo loginctl enable-linger $USER");
   } else {
@@ -189,6 +238,7 @@ export function install(options: { quiet?: boolean } = {}): void {
     process.exit(1);
   }
 
+  warnIfClaudeMissing(servicePath());
   say(`   日志：${logPath}`);
   say("   查看状态：feishu-claude-bridge service status");
 }
