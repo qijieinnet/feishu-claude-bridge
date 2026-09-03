@@ -1,0 +1,143 @@
+// fcb upgrade：一条命令升到最新，并且不用重设开机自启。
+//
+// 手工升级有三个坑，这条命令就是来填它们的：
+//   1. 装完不重启，后台服务还跑着旧代码 —— 表面升了，行为没变；
+//   2. 直接覆盖安装时服务还在跑，会撞上正被替换的文件；
+//   3. fnm / nvm 换过 node 版本后，服务定义里记的 node 路径已经不存在，
+//      服务安静地起不来 —— 而人只会觉得「升级把它搞坏了」。
+// 所以顺序是：停服务 → 升级 → 重写服务定义并拉起。配置和会话都在
+// ~/.feishu-claude-bridge，全程不碰，不需要重跑 setup。
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { isInstalled, install, logPath, recordedNodePath, stop } from "../service/manager.js";
+
+const packageRoot = path.resolve(fileURLToPath(import.meta.url), "../../..");
+const packageJsonPath = path.join(packageRoot, "package.json");
+
+/** 从 git 仓库里跑（开发或克隆）还是全局装的 npm 包，升级方式不一样。 */
+const fromGitCheckout = fs.existsSync(path.join(packageRoot, ".git"));
+
+type Stamp = { version: string; installedAt: string };
+
+function stamp(): Stamp {
+  let version = "?";
+  try {
+    version = (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string })
+      .version ?? "?";
+  } catch {
+    // 读不到版本不该挡住升级
+  }
+  let installedAt = "未知";
+  try {
+    installedAt = fs.statSync(packageJsonPath).mtime.toLocaleString("zh-CN");
+  } catch {
+    // 同上
+  }
+  return { version, installedAt };
+}
+
+/**
+ * 升级源。默认从 package.json 的 repository 推出 npm 认得的 github: 简写，
+ * 这样 fork 出去的仓库会自动升级自己那份，而不是回到上游。
+ */
+function defaultSpec(): string {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      repository?: { url?: string };
+      name?: string;
+    };
+    const matched = /github\.com[:/]+([^/]+)\/([^/.]+)/.exec(pkg.repository?.url ?? "");
+    if (matched) return `github:${matched[1]}/${matched[2]}`;
+    if (pkg.name) return pkg.name;
+  } catch {
+    // 落到下面的兜底
+  }
+  return "github:qijieinnet/feishu-claude-bridge";
+}
+
+/** 直接把子进程的输出摊给用户看 —— npm 装 git 依赖要几分钟，没输出会以为卡死。 */
+function run(command: string, args: string[], cwd?: string): void {
+  console.log(`\n$ ${command} ${args.join(" ")}`);
+  execFileSync(command, args, { stdio: "inherit", ...(cwd ? { cwd } : {}) });
+}
+
+function upgradeFromGit(): void {
+  const dirty = execFileSync("git", ["status", "--porcelain"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+  }).trim();
+  if (dirty) {
+    console.error(`本地有未提交的改动，先处理掉再升级（${packageRoot}）：\n${dirty}`);
+    process.exit(1);
+  }
+  run("git", ["pull", "--ff-only"], packageRoot);
+  run("npm", ["install"], packageRoot);
+}
+
+function upgradeFromNpm(spec: string): void {
+  console.log(`从 ${spec} 升级（要拉整个仓库并装依赖，通常要几分钟）…`);
+  run("npm", ["install", "-g", spec]);
+}
+
+function main(): void {
+  const spec = process.argv[2];
+  const before = stamp();
+  console.log(
+    `当前：${before.version}（${fromGitCheckout ? "git 仓库" : "全局安装"}，` +
+      `${before.installedAt}）\n位置：${packageRoot}`,
+  );
+
+  const serviceInstalled = isInstalled();
+  const nodeChanged = serviceInstalled && recordedNodePath() !== process.execPath;
+  if (serviceInstalled) {
+    console.log("先停掉后台服务，避免覆盖到正在使用的文件…");
+    stop();
+  }
+
+  let failed: unknown;
+  try {
+    if (fromGitCheckout) upgradeFromGit();
+    else upgradeFromNpm(spec ?? defaultSpec());
+  } catch (err) {
+    failed = err;
+  }
+
+  if (serviceInstalled) {
+    // 重装而不是简单 start：node 路径、入口路径可能都变了，这一步一并修好。
+    // 只重写服务定义文件，配置和会话不动。
+    console.log("\n重启后台服务…");
+    install({ quiet: true });
+    if (nodeChanged) console.log("   （顺带修好了变化过的 node 路径）");
+  }
+
+  if (failed) {
+    console.error(
+      `\n❌ 升级失败，已用原来的版本把服务恢复运行。\n` +
+        `   ${failed instanceof Error ? failed.message : String(failed)}\n` +
+        `   权限不足报 EACCES 的话，说明当初是用 sudo 装的，升级也要加 sudo。`,
+    );
+    process.exit(1);
+  }
+
+  const after = stamp();
+  const changed = after.installedAt !== before.installedAt;
+  console.log(
+    `\n✅ 升级完成：${before.version} → ${after.version}` +
+      `（${changed ? `代码已更新，${after.installedAt}` : "文件没有变化，应该已经是最新"}）`,
+  );
+  if (!changed && !fromGitCheckout) {
+    // 版本号是跟着 commit 走的，装完看不出差别时，八成是 npm 拿了缓存里的旧 commit
+    console.log("   确认远端有新提交却没更新的话：npm cache clean --force 后重跑");
+  }
+  if (serviceInstalled) {
+    console.log(`   后台服务已用新代码起来了，日志：${logPath}`);
+  } else {
+    console.log("   没装开机自启，重新执行 fcb start 即可（或 fcb service install 让它常驻）");
+  }
+  console.log("   配置、配对和会话都在 ~/.feishu-claude-bridge，升级不会动它们");
+  console.log("   想确认一切正常：fcb doctor");
+}
+
+main();

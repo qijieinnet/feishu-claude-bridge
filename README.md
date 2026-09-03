@@ -99,10 +99,39 @@ feishu-claude-bridge service status      # 看是否在运行
 feishu-claude-bridge service uninstall   # 取消自启
 ```
 
+```bash
+feishu-claude-bridge service restart     # 换了 node 版本、或想让它重新加载时
+```
+
 日志在 `~/.feishu-claude-bridge/logs/out.log`（配对码、审批提示都会打在这里，实时看用 `tail -f`）。
 
 > 一个容易踩的坑：launchd 和 systemd 的默认 `PATH` 极窄，会导致服务起来了却找不到 `claude`。
 > 安装时会把你当前 shell 的 `PATH` 一并写进配置，避免这个问题。
+
+## 升级
+
+一条命令：
+
+```bash
+fcb upgrade
+```
+
+它会**停服务 → 拉新代码 → 重写服务定义并拉起**，一步到位。三件事是刻意做在一起的：
+
+- 装完不重启，后台服务还跑着旧代码 —— 表面升了，行为没变；
+- 直接覆盖安装时服务还在跑，会撞上正被替换的文件；
+- fnm / nvm 换过 node 版本后，服务定义里记的 node 路径已经不存在，服务会安静地起不来 —— 而人只会觉得「升级把它搞坏了」。重写服务定义顺手就修好了。
+
+**配置、配对记录、会话映射都在 `~/.feishu-claude-bridge`，升级全程不碰，不需要重跑 `setup`，也不需要重设开机自启。**
+
+> 从 git 仓库里跑的（开发模式）会走 `git pull --ff-only` + `npm install`，有未提交改动时会先拦下来。
+> 想升到某个分支或 fork：`fcb upgrade github:你的用户名/feishu-claude-bridge#分支名`。
+
+机器上装的还是没有 `upgrade` 命令的旧版本时，用这一句过渡（`service install` 本身就是幂等的重装 + 重启）：
+
+```bash
+npm i -g github:qijieinnet/feishu-claude-bridge && fcb service install
+```
 > 如果之后你换了 Node 或 Claude Code 的安装位置，重新跑一次 `service install` 即可。
 
 Linux 上如果希望**未登录时也运行**，还需要：

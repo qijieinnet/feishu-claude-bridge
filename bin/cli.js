@@ -11,6 +11,7 @@ const COMMANDS = {
   pair: "../src/cli/pair.ts",
   doctor: "../src/cli/doctor.ts",
   service: "../src/cli/service.ts",
+  upgrade: "../src/cli/upgrade.ts",
 };
 
 const USAGE = `feishu-claude-bridge —— 在飞书里聊天驱动本机 Claude Code
@@ -20,7 +21,8 @@ const USAGE = `feishu-claude-bridge —— 在飞书里聊天驱动本机 Claude
   feishu-claude-bridge doctor    体检：配置 / 飞书连通性 / Claude 认证
   feishu-claude-bridge start     启动桥接器（默认命令）
   feishu-claude-bridge pair ...  配对管理：list | approve <CODE> | revoke <open_id>
-  feishu-claude-bridge service ... 开机自启：install | uninstall | status
+  feishu-claude-bridge service ... 开机自启：install | uninstall | restart | status
+  feishu-claude-bridge upgrade   升级到最新版并重启服务（不动配置和自启）
 
 配置目录：~/.feishu-claude-bridge（可用 BRIDGE_HOME 覆盖）
 文档：https://github.com/qijieinnet/feishu-claude-bridge
