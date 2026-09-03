@@ -20,6 +20,14 @@ on:
   # 也允许在 Actions 页面手动触发（用于补发）
   workflow_dispatch:
 
+# 一次 git push origin main --follow-tags 会推分支和 tag 两个 ref，GitHub
+# 可能就此派发两次 push 事件 —— 两个 run 抢着发同一个版本，后到的那个必然
+# 撞上「cannot publish over the previously published versions」而变红。
+# 串起来跑，再配合下面的「已发布就跳过」，重复触发和手动重跑都不会再报错。
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   # OIDC 换取发布凭据全靠这行，少了必然 403
@@ -63,4 +71,11 @@ jobs:
           echo "版本一致：$pkg"
 
       - name: 发布
-        run: npm publish
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          name="$(node -p "require('./package.json').name")"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "::notice::$name@$version 已经在 registry 上了，跳过发布"
+            exit 0
+          fi
+          npm publish
