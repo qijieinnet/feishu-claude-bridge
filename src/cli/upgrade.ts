@@ -19,7 +19,20 @@ const packageJsonPath = path.join(packageRoot, "package.json");
 /** 从 git 仓库里跑（开发或克隆）还是全局装的 npm 包，升级方式不一样。 */
 const fromGitCheckout = fs.existsSync(path.join(packageRoot, ".git"));
 
-type Stamp = { version: string; installedAt: string };
+type Stamp = { version: string; commit?: string; installedAt: string };
+
+/** git 模式下 commit 才是真信号：版本号是跟着发布走的，日常提交并不会动它。 */
+function currentCommit(): string | undefined {
+  if (!fromGitCheckout) return undefined;
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: packageRoot,
+      encoding: "utf8",
+    }).trim();
+  } catch {
+    return undefined;
+  }
+}
 
 function stamp(): Stamp {
   let version = "?";
@@ -35,7 +48,12 @@ function stamp(): Stamp {
   } catch {
     // 同上
   }
-  return { version, installedAt };
+  const commit = currentCommit();
+  return { version, ...(commit ? { commit } : {}), installedAt };
+}
+
+function describe(s: Stamp): string {
+  return s.commit ? `${s.version} @${s.commit}` : `${s.version}（${s.installedAt}）`;
 }
 
 /**
@@ -104,8 +122,8 @@ function main(): void {
   const spec = process.argv[2];
   const before = stamp();
   console.log(
-    `当前：${before.version}（${fromGitCheckout ? "git 仓库" : "全局安装"}，` +
-      `${before.installedAt}）\n位置：${packageRoot}`,
+    `当前：${describe(before)}（${fromGitCheckout ? "git 仓库" : "全局安装"}）\n` +
+      `位置：${packageRoot}`,
   );
 
   const serviceInstalled = isInstalled();
@@ -141,13 +159,20 @@ function main(): void {
   }
 
   const after = stamp();
-  const changed = after.installedAt !== before.installedAt;
+  // git 模式比 commit（版本号日常不动，比它会得出假阴性）；
+  // 全局安装没有 commit 可比，只能看包文件有没有被重新铺过
+  const moved =
+    before.commit && after.commit
+      ? before.commit !== after.commit
+      : after.installedAt !== before.installedAt;
+
   console.log(
-    `\n✅ 升级完成：${before.version} → ${after.version}` +
-      `（${changed ? `代码已更新，${after.installedAt}` : "文件没有变化，应该已经是最新"}）`,
+    moved
+      ? `\n✅ 已升级：${describe(before)} → ${describe(after)}`
+      : `\n✅ 已经是最新：${describe(after)}`,
   );
-  if (!changed && !fromGitCheckout) {
-    // 版本号是跟着 commit 走的，装完看不出差别时，八成是 npm 拿了缓存里的旧 commit
+  if (!moved && !fromGitCheckout) {
+    // 全局安装看不出变化时，八成是 npm 拿了缓存里的旧 commit
     console.log("   确认远端有新提交却没更新的话：npm cache clean --force 后重跑");
   }
   if (serviceInstalled) {
