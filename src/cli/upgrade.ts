@@ -63,15 +63,34 @@ function run(command: string, args: string[], cwd?: string): void {
   execFileSync(command, args, { stdio: "inherit", ...(cwd ? { cwd } : {}) });
 }
 
+const LOCKFILE = "package-lock.json";
+
 function upgradeFromGit(): void {
+  // 锁文件单独放行：npm install 常常会顺手改写它（npm 版本不同、平台可选依赖不同
+  // 都会），那是上一次升级自己留下的痕迹，不该在下一次升级时被当成「你有未提交的
+  // 改动」把人拦在门外。反正它马上会被 npm install 重新生成。
   const dirty = execFileSync("git", ["status", "--porcelain"], {
     cwd: packageRoot,
     encoding: "utf8",
-  }).trim();
-  if (dirty) {
-    console.error(`本地有未提交的改动，先处理掉再升级（${packageRoot}）：\n${dirty}`);
+  })
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.endsWith(LOCKFILE));
+
+  if (dirty.length > 0) {
+    console.error(
+      `本地有未提交的改动，先处理掉再升级（${packageRoot}）：\n${dirty.join("\n")}`,
+    );
     process.exit(1);
   }
+
+  // 给 git pull 让路，否则它会因为锁文件被改而拒绝合并
+  try {
+    execFileSync("git", ["checkout", "--", LOCKFILE], { cwd: packageRoot, stdio: "pipe" });
+  } catch {
+    // 没改过、或者根本没这个文件，都不影响后面
+  }
+
   run("git", ["pull", "--ff-only"], packageRoot);
   run("npm", ["install"], packageRoot);
 }
