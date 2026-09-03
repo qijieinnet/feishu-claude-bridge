@@ -79,7 +79,7 @@ export const HELP_TEXT = [
   "`/stop` 中断当前执行",
   "`/cd <相对目录>` 切换工作目录（限 workspace 内）",
   "`/pwd` 显示当前工作目录",
-  "`/status` 查看当前会话、模型、目录",
+  "`/status` 查看当前会话、模型、思考程度、目录",
   "`/approve <请求ID> allow-once|allow-always|deny` 审批兜底",
   "`/help` 显示本帮助",
 ].join("\n");

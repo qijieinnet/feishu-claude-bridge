@@ -61,6 +61,9 @@ export type ApprovalBridge = (
   input: Record<string, unknown>,
 ) => Promise<PermissionResult>;
 
+/** 当前这条会话真正生效的模型与思考程度。 */
+export type RuntimeInfo = { model?: string; effort?: string };
+
 export type SessionOptions = {
   cwd: string;
   model?: string;
@@ -76,6 +79,7 @@ export class ClaudeSession {
   private sessionId: string | undefined;
   /** 是否已经拉起过 query。用来区分首次启动和崩溃后的重启。 */
   private everStarted = false;
+  private runtime: RuntimeInfo = {};
 
   constructor(
     private readonly opts: SessionOptions,
@@ -142,6 +146,15 @@ export class ClaudeSession {
       }
     }
 
+    // init 里带着这一轮真正用的模型（settings 里配的、或 setModel 切过的）
+    if (message.type === "system" && message.subtype === "init") {
+      this.runtime = {
+        model: message.model,
+        ...(message.effort ? { effort: message.effort } : {}),
+      };
+      return;
+    }
+
     if (message.type === "assistant") {
       const blocks = message.message.content;
       if (Array.isArray(blocks)) {
@@ -200,6 +213,38 @@ export class ClaudeSession {
   async setModel(model?: string): Promise<void> {
     this.start();
     await this.q!.setModel(model);
+    this.runtime = {};
+  }
+
+  /**
+   * 查当前实际生效的模型与思考程度。
+   *
+   * 会拉起 CLI 进程，但不消耗对话轮次 —— 走的是控制请求，不是一次提问。
+   * 只靠 binding.model 是不够的：用户没显式 /model 时那里是空的，
+   * 真正的模型来自 ~/.claude/settings.json 等配置，只有 CLI 自己知道。
+   *
+   * getSettings 没写进 SDK 的 Query 类型（只有请求类型是公开的），
+   * 所以先探测再调用；将来 SDK 拿掉它，这里退回 init 消息里记下的值。
+   */
+  async describeRuntime(): Promise<RuntimeInfo> {
+    this.start();
+    const q = this.q as unknown as {
+      getSettings?: () => Promise<{ applied?: { model?: string; effort?: string | null } }>;
+    };
+    if (typeof q.getSettings === "function") {
+      try {
+        const applied = (await q.getSettings()).applied;
+        if (applied?.model) {
+          this.runtime = {
+            model: applied.model,
+            ...(applied.effort ? { effort: applied.effort } : {}),
+          };
+        }
+      } catch (err) {
+        console.error("[会话] 读取模型设置失败:", err);
+      }
+    }
+    return this.runtime;
   }
 
   async interrupt(): Promise<void> {

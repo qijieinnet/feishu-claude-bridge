@@ -270,6 +270,31 @@ function getOrCreateSession(params: {
 }
 
 /**
+ * 当前会话真正用的模型 / 思考程度，拿去展示。
+ *
+ * 探测要拉起 CLI 进程，失败就退回绑定里记的那点信息 ——
+ * 展示用的字段不该让 /new、/status 这种命令整条失败。
+ */
+function effortSuffix(effort: string | undefined): string {
+  return effort ? `，思考 ${effort}` : "";
+}
+
+async function describeRuntime(
+  session: ClaudeSession,
+  key: string,
+): Promise<{ model: string; effort?: string }> {
+  try {
+    const runtime = await session.describeRuntime();
+    if (runtime.model) {
+      return { model: runtime.model, ...(runtime.effort ? { effort: runtime.effort } : {}) };
+    }
+  } catch (err) {
+    console.error("[会话] 读取模型信息失败:", err);
+  }
+  return { model: getBinding(key).model ?? "默认" };
+}
+
+/**
  * 切到指定的历史会话。
  *
  * 先校验记录确实存在：SDK 的 resume 要等下一条消息真正发出去才会报错，
@@ -412,12 +437,17 @@ async function handleMessage(data: any): Promise<void> {
 
     case "status": {
       const binding = getBinding(key);
+      const runtime = await describeRuntime(
+        getOrCreateSession({ key, chatId, operatorOpenId }),
+        key,
+      );
       await sendText(
         chatId,
         [
           `会话：${binding.sessionId ?? "(尚未建立)"}`,
           `目录：${binding.cwd}`,
-          `模型：${binding.model ?? "默认"}`,
+          `模型：${runtime.model}`,
+          ...(runtime.effort ? [`思考程度：${runtime.effort}`] : []),
         ].join("\n"),
       );
       return;
@@ -443,7 +473,11 @@ async function handleMessage(data: any): Promise<void> {
       live.delete(key);
       resetSession(key);
       if (command.model) updateBinding(key, { model: command.model });
-      await sendText(chatId, `已开新会话${command.model ? `（模型 ${command.model}）` : ""}。`);
+      const runtime = await describeRuntime(
+        getOrCreateSession({ key, chatId, operatorOpenId }),
+        key,
+      );
+      await sendText(chatId, `已开新会话（模型 ${runtime.model}${effortSuffix(runtime.effort)}）。`);
       return;
     }
 
@@ -497,7 +531,8 @@ async function handleMessage(data: any): Promise<void> {
       if (command.model) {
         await session.setModel(command.model);
         updateBinding(key, { model: command.model });
-        await sendText(chatId, `模型已切换为 ${command.model}。`);
+        const runtime = await describeRuntime(session, key);
+        await sendText(chatId, `模型已切换为 ${runtime.model}${effortSuffix(runtime.effort)}。`);
         return;
       }
       const models = await session.listModels();
