@@ -56,23 +56,40 @@ function describe(s: Stamp): string {
   return s.commit ? `${s.version} @${s.commit}` : `${s.version}（${s.installedAt}）`;
 }
 
+/** registry 上有没有这个包。发布之前是没有的，所以不能想当然。 */
+function publishedOnNpm(name: string): boolean {
+  try {
+    execFileSync("npm", ["view", name, "version"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * 升级源。默认从 package.json 的 repository 推出 npm 认得的 github: 简写，
- * 这样 fork 出去的仓库会自动升级自己那份，而不是回到上游。
+ * 升级源。
+ *
+ * 优先走 npm 包名：装一个 tarball 比从 GitHub 拉整个仓库再装依赖快一个数量级。
+ * registry 上还没有（没发布，或断网）就退回 repository 推出来的 github: 简写。
+ * 想升到 fork 或某个分支，直接把 spec 当参数传：
+ *   fcb upgrade github:你的用户名/feishu-claude-bridge#分支名
  */
 function defaultSpec(): string {
+  let name: string | undefined;
+  let github: string | undefined;
   try {
     const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
       repository?: { url?: string };
       name?: string;
     };
+    name = pkg.name;
     const matched = /github\.com[:/]+([^/]+)\/([^/.]+)/.exec(pkg.repository?.url ?? "");
-    if (matched) return `github:${matched[1]}/${matched[2]}`;
-    if (pkg.name) return pkg.name;
+    if (matched) github = `github:${matched[1]}/${matched[2]}`;
   } catch {
     // 落到下面的兜底
   }
-  return "github:qijieinnet/feishu-claude-bridge";
+  if (name && publishedOnNpm(name)) return name;
+  return github ?? name ?? "github:qijieinnet/feishu-claude-bridge";
 }
 
 /** 直接把子进程的输出摊给用户看 —— npm 装 git 依赖要几分钟，没输出会以为卡死。 */
@@ -114,7 +131,10 @@ function upgradeFromGit(): void {
 }
 
 function upgradeFromNpm(spec: string): void {
-  console.log(`从 ${spec} 升级（要拉整个仓库并装依赖，通常要几分钟）…`);
+  const slow = spec.startsWith("github:") || spec.includes("://");
+  console.log(
+    `从 ${spec} 升级${slow ? "（要拉整个仓库并装依赖，通常要几分钟）" : ""}…`,
+  );
   run("npm", ["install", "-g", spec]);
 }
 

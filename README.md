@@ -24,14 +24,17 @@
 一条命令装好：
 
 ```bash
-npm i -g github:qijieinnet/feishu-claude-bridge
+npm i -g feishu-claude-bridge
 ```
 
 不想全局安装也可以直接跑，不留任何东西：
 
 ```bash
-npx github:qijieinnet/feishu-claude-bridge setup
+npx feishu-claude-bridge setup
 ```
+
+> 想装还没发布的最新代码，把包名换成 `github:qijieinnet/feishu-claude-bridge` 即可，
+> 只是要拉整个仓库再装依赖，慢得多。
 
 ## 快速开始
 
@@ -139,13 +142,15 @@ fcb upgrade
 
 **配置、配对记录、会话映射都在 `~/.feishu-claude-bridge`，升级全程不碰，不需要重跑 `setup`，也不需要重设开机自启。**
 
+升级源默认用 npm 包名（装 tarball 比从 GitHub 拉整个仓库快一个数量级）；registry 上取不到时自动退回 `github:` 那条路。
+
 > 从 git 仓库里跑的（开发模式）会走 `git pull --ff-only` + `npm install`，有未提交改动时会先拦下来。
 > 想升到某个分支或 fork：`fcb upgrade github:你的用户名/feishu-claude-bridge#分支名`。
 
 机器上装的还是没有 `upgrade` 命令的旧版本时，用这一句过渡（`service install` 本身就是幂等的重装 + 重启）：
 
 ```bash
-npm i -g github:qijieinnet/feishu-claude-bridge && fcb service install
+npm i -g feishu-claude-bridge && fcb service install
 ```
 > 如果之后你换了 Node 或 Claude Code 的安装位置，重新跑一次 `service install` 即可。
 
