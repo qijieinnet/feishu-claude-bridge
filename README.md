@@ -12,6 +12,7 @@
 - **会话自动延续**：默认接着上次聊，进程重启也能接上；闲置 12 小时才作废并自动开新的
 - **过程与回复分离**：思考和工具调用实时刷在过程卡里，**完成后自动折叠成一行**；最终回复单独一张极简卡片
 - **卡片授权**：未预批的操作弹卡片，三档 —— 允许一次 / 总是允许 / 拒绝；「总是允许」会记住同类操作
+- **选项可点**：Claude 给选项时（`AskUserQuestion`）弹提问卡，一个选项一个按钮，支持多选；选项都不合适就直接发消息，那条消息即为回答
 - **配对准入**：陌生人发消息只会拿到一个配对码，你在终端批准后他才能用
 - **模型热切**：`/model` 弹卡片选，列表由 SDK 实时提供，不写死
 - **正在输入**：收到消息立刻给你那条消息贴 `Typing` 表情，干完自动撤掉
@@ -146,7 +147,7 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 | `/cd <相对目录>` | 切换工作目录（限 workspace 内） |
 | `/pwd` | 显示当前工作目录 |
 | `/status` | 查看当前会话、模型、目录 |
-| `/approve <请求ID> <决策>` | 卡片失效时的审批兜底 |
+| `/approve <请求ID> <决策>` | 授权卡失效时的兜底（提问卡不用它，直接发消息作答即可） |
 | `/help` | 帮助 |
 
 ## 配置
@@ -173,6 +174,10 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 **信封为什么不签名**：它不是凭证，只是一份声明。真正的信任锚是飞书回调里的 `operator.open_id`（平台签发，客户端伪造不了）和服务端的 pending 表 + 白名单。
 
 **`permissionMode` 固定为 `default`，不要改成 `bypassPermissions`** —— 那会让 `canUseTool` 变成死代码，权限流程在到达回调之前就放行，所有审批卡片都不再弹。
+
+**提问不是授权**：`AskUserQuestion` 走的是另一条路。SDK 约定「选了什么」必须顺着 `canUseTool` 的 `updatedInput.answers`（问题原文 → 答案）回填，少这一步工具会以 `The user did not answer the questions.` 收场 —— 表现就是 Claude 每次都说你没选。同理，`AskUserQuestion` / `ExitPlanMode` 被硬挡在 allow-always 之外：记住它们等于以后再也不问，而每轮都以「没人作答」告终。
+
+**提问卡的按钮带的是绝对状态（选中/未选中），不是「切换」**：飞书会重投回调，切换语义投两次等于没点；而且回调去重是按内容算的，同一个「切换」连点两次会被当成重复丢掉第二次，多选就永远取消不掉。
 
 **「总是允许」的粒度是刻意保守的**：Bash 只匹配命令的第一个词，文件类只匹配所在目录。宁可多问几次，也不要因为特征太宽而放行了本不该放行的东西。记录在 `data/allowlist.json`，想反悔直接删对应条目。
 
@@ -203,13 +208,13 @@ src/
   cli-hint.ts           提示命令时按安装方式选 fcb 还是 npm run
   feishu/
     client.ts           发消息、发卡片、更新卡片、表情回复
-    cards.ts            卡片构造（审批 / 模型 / 历史会话 / 过程 / 回复）
+    cards.ts            卡片构造（审批 / 提问 / 模型 / 历史会话 / 过程 / 回复）
     envelope.ts         交互信封的构造与校验
     turn-stream.ts      一轮输出的编排：过程卡 + 最终回复，全程串行
   claude/
     session.ts          常驻 query、流式输入、模型与中断控制
     history.ts          读 ~/.claude/projects 下的历史会话记录
-    approvals.ts        审批 pending 表、超时、allow-always 落盘
+    approvals.ts        卡点 pending 表（授权 + 提问）、超时、allow-always 落盘
     errors.ts           错误分类与人话提示
   setup/
     register.ts         飞书应用注册（OAuth device-code）

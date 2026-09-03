@@ -67,6 +67,8 @@ export function parseCommand(raw: string): ParsedCommand {
 export const HELP_TEXT = [
   "直接说话即可，会自动接着上次的会话。闲置 12 小时后自动开新会话。",
   "",
+  "Claude 给选项时会发一张提问卡，点按钮即可作答；都不合适就直接发消息，那条消息会被当成你的回答。",
+  "",
   "**命令**（需整条消息只有命令）",
   "",
   "`/new [模型]` 立即开一条新会话，可顺带指定模型",

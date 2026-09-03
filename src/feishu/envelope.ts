@@ -15,8 +15,19 @@ export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 // k 是会话键：卡片回调里拿不到 thread_id，不带上它就只能退回 chat 级别的键，
 // 在话题里点按钮会操作到群本身的会话上。凡是「作用于某条会话」的动作都得带。
+// 提问卡的动作只带 requestId 和下标，不带选项原文：信封是要塞进按钮回调值里的，
+// 问题和选项在服务端的 pending 表里已经有一份，没必要再抄一遍。
+//
+// ask 的 v 是「点完之后该是选中(1)还是未选中(0)」，而不是「切换」。飞书会重投回调，
+// 切换语义在重投下不幂等（投两次等于没点）；而且去重键是按回调内容算的，
+// 同一个「切换」连点两次会被当成重复而丢掉第二次 —— 多选就永远取消不掉。
+// 写成绝对状态后，重投多少次结果都一样，而真正的第二次点击因为卡片已重渲、
+// v 翻了面，回调内容天然不同，不会被误判成重投。
 export type EnvelopeAction =
   | { a: "approval"; r: string; d: ApprovalDecision }
+  | { a: "ask"; r: string; q: number; o: number; v: 0 | 1 }
+  | { a: "ask-submit"; r: string }
+  | { a: "ask-skip"; r: string }
   | { a: "model"; m: string; k: string }
   | { a: "resume"; s: string; k: string };
 

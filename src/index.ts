@@ -14,18 +14,32 @@ import {
   approvalResolvedCard,
   modelPickerCard,
   progressCard,
+  questionCard,
+  questionResolvedCard,
   replyCard,
   sessionListCard,
 } from "./feishu/cards.js";
 import { decodeEnvelope, DECODE_FAILURE_TEXT, type CardEnvelope } from "./feishu/envelope.js";
 import { TurnStream } from "./feishu/turn-stream.js";
 import {
+  answerWithText,
+  answersOf,
   attachMessageId,
-  createApproval,
+  cancelPending,
+  createPending,
   describeToolCall,
+  findPendingQuestion,
+  getPending,
   isPreApproved,
+  isRememberable,
+  parseQuestions,
   resolveApproval,
+  setOption,
   signatureOf,
+  skipQuestion,
+  submitAnswers,
+  unansweredCount,
+  type PendingRequest,
 } from "./claude/approvals.js";
 import { ClaudeSession } from "./claude/session.js";
 import { listSessions, sessionExists } from "./claude/history.js";
@@ -59,24 +73,92 @@ function cardCtx(chatId: string, operatorOpenId: string) {
 }
 
 /**
+ * AskUserQuestion 的飞书实现：把选项渲染成真的能点的按钮。
+ *
+ * 关键在返回值：SDK 约定「选了什么」要顺着 updatedInput.answers 回填
+ * （问题原文 → 答案），少了这一步工具会以「The user did not answer the
+ * questions.」收场 —— 表现就是 Claude 每次都说你没选。
+ *
+ * 解不出问题清单就返回 null，让调用方退回普通授权卡。
+ */
+async function askQuestion(params: {
+  sessionKey: string;
+  chatId: string;
+  operatorOpenId: string;
+  input: Record<string, unknown>;
+}): Promise<PermissionResult | null> {
+  const questions = parseQuestions(params.input);
+  if (!questions) return null;
+
+  const { requestId, outcome } = createPending({
+    toolName: "AskUserQuestion",
+    signature: "AskUserQuestion",
+    chatId: params.chatId,
+    sessionKey: params.sessionKey,
+    questions,
+    onTimeout: async (entry) => {
+      if (entry.messageId) {
+        await updateCard(
+          entry.messageId,
+          questionResolvedCard({ questions, answers: {}, note: "超时未作答。" }),
+        );
+      }
+    },
+  });
+
+  const messageId = await sendCard(
+    params.chatId,
+    questionCard({
+      requestId,
+      questions,
+      selections: questions.map(() => []),
+      ctx: cardCtx(params.chatId, params.operatorOpenId),
+    }),
+  );
+  attachMessageId(requestId, messageId);
+
+  const result = await outcome;
+  const answers = result.kind === "answers" ? result.answers : {};
+  if (Object.keys(answers).length > 0) {
+    return { behavior: "allow", updatedInput: { ...params.input, answers } };
+  }
+
+  // 一个都没答成（超时/跳过）。说清楚是「没作答」而不是「拒绝这件事」，
+  // 并且明说别再问一遍 —— 否则很容易在飞书上来回刷同一张卡。
+  return {
+    behavior: "deny",
+    message:
+      "用户没有在飞书上作答（超时或主动跳过）。不要重复提同样的问题：" +
+      "按你认为合理的默认继续，并在回复里说明你替他选了什么。",
+  };
+}
+
+/**
  * canUseTool 的飞书实现：预批过的直接放行，否则发卡片并挂起等待。
  * 对同一 request_id 必须幂等 —— reinitialize 之后 SDK 会重投同一个请求。
  */
-function makeApprovalBridge(chatId: string, operatorOpenId: string) {
+function makeApprovalBridge(sessionKey: string, chatId: string, operatorOpenId: string) {
   return async (
     toolName: string,
     input: Record<string, unknown>,
   ): Promise<PermissionResult> => {
+    // 提问不是授权：它要的不是「允不允许」，而是「你选哪个」，走专门的一条路。
+    if (toolName === "AskUserQuestion") {
+      const answered = await askQuestion({ sessionKey, chatId, operatorOpenId, input });
+      if (answered) return answered;
+    }
+
     const signature = signatureOf(toolName, input);
 
-    if (isPreApproved(signature)) {
+    if (isPreApproved(toolName, signature)) {
       return { behavior: "allow", updatedInput: input };
     }
 
-    const { requestId, decision } = createApproval({
+    const { requestId, outcome } = createPending({
       toolName,
       signature,
       chatId,
+      sessionKey,
       onTimeout: async (entry) => {
         if (entry.messageId) {
           await updateCard(
@@ -98,13 +180,14 @@ function makeApprovalBridge(chatId: string, operatorOpenId: string) {
         requestId,
         toolName,
         detail: describeToolCall(toolName, input),
+        rememberable: isRememberable(toolName),
         ctx: cardCtx(chatId, operatorOpenId),
       }),
     );
     attachMessageId(requestId, messageId);
 
-    const result = await decision;
-    if (result === "deny") {
+    const result = await outcome;
+    if (result.kind === "decision" && result.decision === "deny") {
       return { behavior: "deny", message: "用户在飞书上拒绝了此操作" };
     }
     return { behavior: "allow", updatedInput: input };
@@ -121,6 +204,7 @@ function getOrCreateSession(params: {
   const existing = live.get(params.key);
   if (existing && !params.resumeSessionId) return existing.session;
 
+  if (existing) cancelCards(params.key, "会话已切换");
   void existing?.session.dispose();
 
   let binding = getBinding(params.key);
@@ -177,7 +261,7 @@ function getOrCreateSession(params: {
         updateBinding(params.key, { sessionId });
       },
     },
-    makeApprovalBridge(params.chatId, params.operatorOpenId),
+    makeApprovalBridge(params.key, params.chatId, params.operatorOpenId),
   );
 
   live.set(params.key, { session, chatId: params.chatId });
@@ -207,6 +291,7 @@ async function resumeSession(params: {
     return;
   }
 
+  cancelCards(params.key, "会话已切换");
   await live.get(params.key)?.session.dispose();
   live.delete(params.key);
   updateBinding(params.key, { sessionId: params.sessionId });
@@ -344,6 +429,7 @@ async function handleMessage(data: any): Promise<void> {
         return;
       }
       updateBinding(key, { cwd: resolved, cwdExplicit: true });
+      cancelCards(key, "工作目录已切换");
       await live.get(key)?.session.dispose();
       live.delete(key);
       await sendText(chatId, `工作目录已切换到 ${resolved}，下条消息将开新会话。`);
@@ -351,6 +437,7 @@ async function handleMessage(data: any): Promise<void> {
     }
 
     case "new": {
+      cancelCards(key, "已开新会话");
       await live.get(key)?.session.dispose();
       live.delete(key);
       resetSession(key);
@@ -365,6 +452,7 @@ async function handleMessage(data: any): Promise<void> {
         await sendText(chatId, "当前还没有可分叉的会话。");
         return;
       }
+      cancelCards(key, "已分叉会话");
       await live.get(key)?.session.dispose();
       live.delete(key);
       getOrCreateSession({
@@ -425,6 +513,8 @@ async function handleMessage(data: any): Promise<void> {
     }
 
     case "stop": {
+      // 先取消卡点：挂在 canUseTool 上的那一轮，光 interrupt 是解不开的
+      cancelCards(key, "本轮已中断");
       await live.get(key)?.session.interrupt();
       await sendText(chatId, "已请求中断。");
       return;
@@ -452,6 +542,20 @@ async function handleMessage(data: any): Promise<void> {
 
     case "chat": {
       touchBinding(key);
+
+      // 提问卡挂着的时候整轮是阻塞在 canUseTool 上的，这条消息送进会话也没人接。
+      // 所以先拿它当作答 —— 等价于官方 UI 里自动附带的那个 "Other" 自由输入项。
+      const asking = findPendingQuestion(key);
+      if (asking) {
+        const consumed = answerWithText(asking.requestId, command.text);
+        settleQuestionCard(asking, consumed ? "以消息作答。" : undefined);
+        if (consumed) {
+          void markTyping(key, message.message_id);
+          return;
+        }
+        // 该选的都点过了，那这条就是正常的下一句，照常往下送
+      }
+
       void markTyping(key, message.message_id);
       const session = getOrCreateSession({ key, chatId, operatorOpenId });
       session.send(command.text);
@@ -487,6 +591,52 @@ type CardResponse = {
  */
 function sessionKeyOf(envelope: CardEnvelope, chatId: string): string {
   return ("k" in envelope && envelope.k) || sessionKey({ chatId });
+}
+
+const QUESTION_STALE: CardResponse = {
+  toast: {
+    type: "error",
+    content: "这张提问卡已失效，直接发消息说你的想法就行。",
+  },
+};
+
+/**
+ * 丢弃 / 中断一条会话前的收尾：把它挂着的卡点全部取消并改掉卡片。
+ *
+ * 不做这一步的话，授权卡会停在可点状态却早已无人接收；提问卡更糟 ——
+ * 会把用户的下一条消息当成对一个已经不存在的问题的回答。
+ */
+function cancelCards(sessionKey: string, note: string): void {
+  for (const entry of cancelPending(sessionKey)) {
+    if (!entry.messageId) continue;
+    const card = entry.questions
+      ? questionResolvedCard({ questions: entry.questions, answers: {}, note })
+      : approvalResolvedCard({
+          requestId: entry.requestId,
+          toolName: entry.toolName,
+          decision: "cancelled",
+          by: note,
+        });
+    void updateCard(entry.messageId, card);
+  }
+}
+
+/**
+ * 提问收束后原地把卡片换成结果卡。返回同一张卡，供卡片回调直接回渲
+ * —— 和审批卡一个道理：光调更新接口会被这次回调的本地回渲盖掉。
+ */
+function settleQuestionCard(entry: PendingRequest, note?: string) {
+  const card = questionResolvedCard({
+    questions: entry.questions ?? [],
+    answers: answersOf(entry),
+    ...(note ? { note } : {}),
+  });
+  if (entry.messageId) {
+    void updateCard(entry.messageId, card).then((updated) => {
+      if (!updated) console.warn(`[提问] ${entry.requestId} 已作答，但卡片未能更新状态`);
+    });
+  }
+  return card;
 }
 
 async function handleCardAction(data: any): Promise<CardResponse> {
@@ -550,6 +700,56 @@ async function handleCardAction(data: any): Promise<CardResponse> {
     return {
       toast: { type: "success", content: envelope.d === "deny" ? "已拒绝" : "已允许" },
       card: { type: "raw", data: resolved },
+    };
+  }
+
+  if (envelope.a === "ask") {
+    const state = setOption(envelope.r, envelope.q, envelope.o, envelope.v === 1);
+    if (!state) return QUESTION_STALE;
+    if (state.submitted) {
+      return {
+        toast: { type: "success", content: "已回答" },
+        card: { type: "raw", data: settleQuestionCard(state.entry) },
+      };
+    }
+    // 还没收束（多选，或还有问题没答）：把最新勾选重渲回去，让人看得见自己选了什么
+    return {
+      toast: { type: "info", content: "已勾选" },
+      card: {
+        type: "raw",
+        data: questionCard({
+          requestId: state.entry.requestId,
+          questions: state.entry.questions ?? [],
+          selections: state.entry.selections ?? [],
+          ctx: cardCtx(state.entry.chatId, operatorOpenId!),
+        }),
+      },
+    };
+  }
+
+  if (envelope.a === "ask-submit") {
+    const current = getPending(envelope.r);
+    if (!current) return QUESTION_STALE;
+    if (unansweredCount(current) > 0) {
+      return { toast: { type: "warning", content: "还有问题没选，选完再提交。" } };
+    }
+    const entry = submitAnswers(envelope.r);
+    if (!entry) return QUESTION_STALE;
+    return {
+      toast: { type: "success", content: "已回答" },
+      card: { type: "raw", data: settleQuestionCard(entry) },
+    };
+  }
+
+  if (envelope.a === "ask-skip") {
+    const entry = skipQuestion(envelope.r);
+    if (!entry) return QUESTION_STALE;
+    return {
+      toast: { type: "info", content: "已跳过" },
+      card: {
+        type: "raw",
+        data: settleQuestionCard(entry, "已跳过，Claude 会按合理的默认继续。"),
+      },
     };
   }
 
