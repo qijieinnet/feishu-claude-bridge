@@ -138,6 +138,26 @@ function upgradeFromNpm(spec: string): void {
   run("npm", ["install", "-g", spec]);
 }
 
+/**
+ * 用「刚装上的那份代码」去写服务定义，而不是我们手上这份。
+ *
+ * upgrade 全程跑的是升级前的代码 —— 直接调进程内的 install() 会把旧模板
+ * 原样写回去，服务定义的任何改动都要等到下一次升级才生效，永远慢一拍。
+ * （踩过：修好了 unit 里的 PATH 和日志落盘，升完却发现 unit 还是旧的。）
+ * 所以另起一个进程执行新代码的 service install。
+ */
+function reinstallServiceWithNewCode(): void {
+  try {
+    execFileSync(process.execPath, [path.join(packageRoot, "bin", "cli.js"), "service", "install"], {
+      stdio: "inherit",
+    });
+  } catch {
+    // 新代码有问题就退回旧路径：宁可服务定义旧一点，也不能把服务撂在停着的状态
+    console.warn("   新版本的 service install 没跑通，退回用当前代码重装");
+    install({ quiet: true });
+  }
+}
+
 function main(): void {
   const spec = process.argv[2];
   const before = stamp();
@@ -165,7 +185,7 @@ function main(): void {
     // 重装而不是简单 start：node 路径、入口路径可能都变了，这一步一并修好。
     // 只重写服务定义文件，配置和会话不动。
     console.log("\n重启后台服务…");
-    install({ quiet: true });
+    reinstallServiceWithNewCode();
     if (nodeChanged) console.log("   （顺带修好了变化过的 node 路径）");
   }
 
