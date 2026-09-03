@@ -92,12 +92,22 @@ WantedBy=default.target
 `;
 }
 
+/**
+ * 「本来就没在跑」不是错误。
+ *
+ * install 会先 bootout 再 bootstrap，而 upgrade 更是已经先停过一次了 ——
+ * 此时 launchctl 必然抱怨找不到这个 job。照实打出来只会让人以为升级出了岔子。
+ */
+const NOT_RUNNING = /No such process|Could not find specified service|not loaded/i;
+
 function run(command: string, args: string[]): void {
   try {
     execFileSync(command, args, { stdio: "pipe" });
   } catch (err) {
     const detail = (err as { stderr?: Buffer }).stderr?.toString().trim();
-    if (detail) console.warn(`  ${command} ${args.join(" ")}: ${detail}`);
+    if (detail && !NOT_RUNNING.test(detail)) {
+      console.warn(`  ${command} ${args.join(" ")}: ${detail}`);
+    }
   }
 }
 
