@@ -4,7 +4,11 @@
 #   Organization or user:  qijieinnet
 #   Repository:            feishu-claude-bridge
 #   Workflow filename:     publish.yml     ← 必须和本文件名一字不差
-#   Environment:           留空（本 workflow 没有用 environment）
+#   Environment name:      留空（本 workflow 没有用 environment）
+#   Allowed actions:       勾 npm publish
+#
+# 另有一条藏得很深的要求：package.json 的 repository.url 必须和 GitHub 仓库
+# 完全对得上，否则 OIDC 校验不过。本仓库是对的，改仓库名时记得同步。
 #
 # 发布方式：打一个 v 开头的 tag 推上来，例如
 #   git tag v0.2.0 && git push origin v0.2.0
@@ -25,14 +29,18 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: 22
+          # Trusted Publishing 要求 Node >= 22.14；24 是官方示例用的版本
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          # 发布构建不要用缓存，避免拿到被污染的依赖
+          package-manager-cache: false
 
-      # Trusted Publishing 要 npm >= 11.5.1，runner 自带的通常比这老
+      # Trusted Publishing 要 npm >= 11.5.1。Node 24 自带的通常够，但具体版本
+      # 随 runner 镜像漂移，显式升一下省得哪天以一个很费解的错误挂掉。
       - name: 升级 npm
         run: npm install -g npm@latest
 
