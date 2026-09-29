@@ -5,7 +5,6 @@
 // 也就是 prompt 必须是 async iterable，不能是字符串。这是架构前提，别改。
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
-import { config } from "../config.js";
 
 /** 可以从外部 push 的异步队列，用作 streaming input 的来源。 */
 class AsyncQueue<T> {
@@ -294,5 +293,3 @@ function describeToolUse(name: string, input: unknown): string {
   }
   return name;
 }
-
-export const defaultModel = config.defaultModel;

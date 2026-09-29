@@ -221,6 +221,8 @@ function getOrCreateSession(params: {
   const resumeSessionId =
     params.resumeSessionId ?? (params.fork ? undefined : binding.sessionId);
 
+  const model = binding.model ?? config.defaultModel;
+
   const stream = new TurnStream({
     sendCard: (card) => sendCard(params.chatId, card),
     updateCard: (messageId, card) => updateCard(messageId, card),
@@ -234,7 +236,8 @@ function getOrCreateSession(params: {
   const session = new ClaudeSession(
     {
       cwd: binding.cwd,
-      ...(binding.model ? { model: binding.model } : {}),
+      // 优先级：本会话 /model 选的 > BRIDGE_DEFAULT_MODEL > Claude Code 自己的默认
+      ...(model ? { model } : {}),
       ...(resumeSessionId ? { resumeSessionId } : {}),
       ...(params.fork ? { fork: true } : {}),
     },
@@ -291,7 +294,7 @@ async function describeRuntime(
   } catch (err) {
     console.error("[会话] 读取模型信息失败:", err);
   }
-  return { model: getBinding(key).model ?? "默认" };
+  return { model: getBinding(key).model ?? config.defaultModel ?? "默认" };
 }
 
 /**
@@ -536,11 +539,12 @@ async function handleMessage(data: any): Promise<void> {
         return;
       }
       const models = await session.listModels();
+      const current = getBinding(key).model ?? config.defaultModel;
       await sendCard(
         chatId,
         modelPickerCard({
           models,
-          ...(getBinding(key).model ? { current: getBinding(key).model } : {}),
+          ...(current ? { current } : {}),
           sessionKey: key,
           ctx: cardCtx(chatId, operatorOpenId),
         }),

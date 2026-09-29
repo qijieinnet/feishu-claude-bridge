@@ -15,7 +15,10 @@ export type BoundSession = {
    * 否则改了配置也会被持久化的旧默认值一直盖住。
    */
   cwdExplicit?: boolean;
-  /** 该会话选定的模型，undefined = 用默认 */
+  /**
+   * 当前这条 Claude 会话用 /model 选定的模型，undefined = 跟随 Claude Code 默认
+   * （~/.claude/settings.json 等）。只管当前会话，开新会话就清掉。
+   */
   model?: string;
   updatedAt: number;
 };
@@ -92,9 +95,14 @@ export function updateBinding(key: string, patch: Partial<BoundSession>): BoundS
   return next;
 }
 
-/** 开新会话：丢掉 sessionId，保留 cwd 和模型偏好。 */
+/**
+ * 开新会话：丢掉 sessionId，保留 cwd。
+ *
+ * 模型也一并清掉：留着的话，某次 /model 选过的模型会被钉死在之后所有新会话上，
+ * 用户再怎么改 Claude Code 的默认模型，飞书里新开的会话都不跟。
+ */
 export function resetSession(key: string): BoundSession {
-  return updateBinding(key, { sessionId: undefined });
+  return updateBinding(key, { sessionId: undefined, model: undefined });
 }
 
 /** 会话是否已闲置超时。超时的会话不再续用，下次说话自动开新的。 */

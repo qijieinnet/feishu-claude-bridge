@@ -187,11 +187,11 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 
 | 命令 | 作用 |
 |---|---|
-| `/new [模型]` | 立即开一条新会话，可顺带指定模型 |
+| `/new [模型]` | 立即开一条新会话，默认跟随 Claude Code 的默认模型，可顺带指定 |
 | `/fork` | 从当前会话分叉，原会话保留 |
 | `/sessions` | 列出当前目录下最近的历史会话，点按钮直接恢复 |
 | `/resume <sessionId>` | 恢复指定会话 |
-| `/model [名称]` | 不带参数弹模型选择卡片；带参数直接切换 |
+| `/model [名称]` | 切换当前会话的模型（不带参数弹选择卡片），开新会话后恢复默认 |
 | `/stop` | 中断当前执行 |
 | `/cd <相对目录>` | 切换工作目录（限 workspace 内） |
 | `/pwd` | 显示当前工作目录 |
@@ -210,7 +210,7 @@ feishu-claude-bridge pair revoke <open_id>  # 撤销
 | `BRIDGE_SESSION_TTL_MS` | 会话闲置多久作废，默认 12 小时 |
 | `BRIDGE_APPROVAL_TIMEOUT_MS` | 审批等待超时，默认 30 分钟，超时按拒绝处理 |
 | `BRIDGE_WATCHDOG_MS` | 长连接掉线多久就主动退出重来，默认 10 分钟，设 `0` 关掉 |
-| `BRIDGE_DEFAULT_MODEL` | 默认模型，留空用 Claude Code 默认 |
+| `BRIDGE_DEFAULT_MODEL` | 飞书新会话的默认模型，留空跟随 Claude Code 默认；会话里 `/model` 选的优先 |
 
 ## 安全模型
 
