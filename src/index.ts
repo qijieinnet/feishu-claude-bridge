@@ -56,6 +56,16 @@ import { isDuplicate } from "./dedup.js";
 import { announceOnce, diagnose } from "./claude/errors.js";
 import { isPaired, listApproved, requestPairing, watchPairing } from "./pairing.js";
 import { cliCommand } from "./cli-hint.js";
+import {
+  buildContent,
+  clearUploads,
+  ensureUploadsDir,
+  KIND_LABEL,
+  parseMessage,
+  saveAttachments,
+  sweepUploads,
+  unsupportedTypeLabel,
+} from "./attachments.js";
 import { exitForRestart, startWatchdog } from "./feishu/watchdog.js";
 
 // ---------- 会话管理 ----------
@@ -65,6 +75,25 @@ const live = new Map<string, Live>();
 
 /** 会话键 → 当前轮加在用户消息上的「正在输入」表情，一轮结束就撤掉 */
 const typingByKey = new Map<string, { messageId: string; reactionId: string }>();
+
+/**
+ * 会话键 → 送进会话的最后一条消息。
+ *
+ * 附件要先下载才能送，可能要好几秒；这期间紧跟着发的文字（「这张图是什么」）
+ * 不排队的话会抢在图片前面送进去，Claude 看到的就是一个没头没尾的问题。
+ */
+const sendChainByKey = new Map<string, Promise<void>>();
+
+function enqueueSend(key: string, task: () => Promise<void>): void {
+  const prev = sendChainByKey.get(key) ?? Promise.resolve();
+  const next = prev
+    .then(task)
+    .catch((err) => console.error(`[会话] ${key} 发送消息失败:`, err))
+    .finally(() => {
+      if (sendChainByKey.get(key) === next) sendChainByKey.delete(key);
+    });
+  sendChainByKey.set(key, next);
+}
 
 /** open_id → 他发起配对时所在的会话，批准后用来回他一句 */
 const pendingChatByOpenId = new Map<string, string>();
@@ -214,6 +243,7 @@ function getOrCreateSession(params: {
   if (binding.sessionId && isSessionExpired(binding)) {
     console.log(`[会话] ${params.key} 已闲置超过 ${config.sessionTtlMs / 3600000} 小时，开新会话`);
     binding = resetSession(params.key);
+    clearUploads(params.key);
   }
 
   // 默认续用上一次的会话：进程重启后也能接上，用户不用管会话概念。
@@ -222,6 +252,10 @@ function getOrCreateSession(params: {
     params.resumeSessionId ?? (params.fork ? undefined : binding.sessionId);
 
   const model = binding.model ?? config.defaultModel;
+
+  // 飞书发来的附件存在这里。提前建好并加进可访问目录，
+  // Claude 读这些文件时就不会每次都弹授权卡。
+  const uploadsDir = ensureUploadsDir(params.key);
 
   const stream = new TurnStream({
     sendCard: (card) => sendCard(params.chatId, card),
@@ -238,6 +272,7 @@ function getOrCreateSession(params: {
       cwd: binding.cwd,
       // 优先级：本会话 /model 选的 > BRIDGE_DEFAULT_MODEL > Claude Code 自己的默认
       ...(model ? { model } : {}),
+      additionalDirectories: [uploadsDir],
       ...(resumeSessionId ? { resumeSessionId } : {}),
       ...(params.fork ? { fork: true } : {}),
     },
@@ -323,6 +358,7 @@ async function resumeSession(params: {
   cancelCards(params.key, "会话已切换");
   await live.get(params.key)?.session.dispose();
   live.delete(params.key);
+  if (params.sessionId !== binding.sessionId) clearUploads(params.key);
   updateBinding(params.key, { sessionId: params.sessionId });
   getOrCreateSession({
     key: params.key,
@@ -409,24 +445,24 @@ async function handleMessage(data: any): Promise<void> {
   const mentioned = Array.isArray(message.mentions) && message.mentions.length > 0;
   if (isGroup && !mentioned) return;
 
-  if (message.message_type !== "text") {
-    await sendText(chatId, "目前只支持文本消息。");
+  const parsed = parseMessage(message);
+  if (!parsed) {
+    await sendText(
+      chatId,
+      `暂不支持${unsupportedTypeLabel(message.message_type)}消息。目前支持文字、富文本、图片、文件、语音和视频。`,
+    );
     return;
   }
 
-  let text = "";
-  try {
-    text = String(JSON.parse(message.content ?? "{}").text ?? "");
-  } catch {
-    return;
-  }
   // 去掉 @机器人 的占位
-  text = text.replace(/@_user_\d+/g, "").trim();
-  if (!text) return;
+  const text = parsed.text.replace(/@_user_\d+/g, "").trim();
+  const { attachments } = parsed;
+  if (!text && attachments.length === 0) return;
 
   const key = sessionKey({ chatId, threadId: message.thread_id });
   const operatorOpenId = openId!;
-  const command = parseCommand(text);
+  // 带附件的消息一律当聊天：命令不会和图片文件一起发
+  const command = attachments.length > 0 ? ({ kind: "chat", text } as const) : parseCommand(text);
 
   switch (command.kind) {
     case "help":
@@ -466,6 +502,7 @@ async function handleMessage(data: any): Promise<void> {
       cancelCards(key, "工作目录已切换");
       await live.get(key)?.session.dispose();
       live.delete(key);
+      clearUploads(key);
       await sendText(chatId, `工作目录已切换到 ${resolved}，下条消息将开新会话。`);
       return;
     }
@@ -475,6 +512,7 @@ async function handleMessage(data: any): Promise<void> {
       await live.get(key)?.session.dispose();
       live.delete(key);
       resetSession(key);
+      clearUploads(key);
       if (command.model) updateBinding(key, { model: command.model });
       const runtime = await describeRuntime(
         getOrCreateSession({ key, chatId, operatorOpenId }),
@@ -585,7 +623,8 @@ async function handleMessage(data: any): Promise<void> {
 
       // 提问卡挂着的时候整轮是阻塞在 canUseTool 上的，这条消息送进会话也没人接。
       // 所以先拿它当作答 —— 等价于官方 UI 里自动附带的那个 "Other" 自由输入项。
-      const asking = findPendingQuestion(key);
+      // 带附件的不拿来作答：答案只能是文字，附件会被丢掉
+      const asking = attachments.length === 0 ? findPendingQuestion(key) : undefined;
       if (asking) {
         const consumed = answerWithText(asking.requestId, command.text);
         settleQuestionCard(asking, consumed ? "以消息作答。" : undefined);
@@ -597,8 +636,32 @@ async function handleMessage(data: any): Promise<void> {
       }
 
       void markTyping(key, message.message_id);
-      const session = getOrCreateSession({ key, chatId, operatorOpenId });
-      session.send(command.text);
+      const messageId = message.message_id;
+      enqueueSend(key, async () => {
+        // 排到了再取会话：排队期间可能被 /new 换掉了。
+        // 也必须先取会话再下载 —— 闲置过期会在这里清上传目录，晚了会把刚下好的文件一起删掉。
+        const session = getOrCreateSession({ key, chatId, operatorOpenId });
+        if (attachments.length === 0) {
+          session.send(command.text);
+          return;
+        }
+
+        const { saved, failed } = await saveAttachments({ key, messageId, attachments });
+        if (failed.length > 0) {
+          await sendText(
+            chatId,
+            [
+              "有附件没能下载下来：",
+              ...failed.map((f) => `- ${f.ref.name ?? KIND_LABEL[f.ref.kind]}：${f.reason}`),
+            ].join("\n"),
+          );
+        }
+        if (saved.length === 0 && !command.text) {
+          clearTyping(key);
+          return;
+        }
+        session.send(buildContent(command.text, saved));
+      });
       return;
     }
   }
@@ -880,6 +943,7 @@ function main(): void {
     knownApproved = new Set(current);
   });
 
+  sweepUploads();
   wsClient.start({ eventDispatcher });
   startWatchdog(wsClient);
   console.log(`[启动] 已连接飞书长连接。workspace=${config.workspaceRoot}`);

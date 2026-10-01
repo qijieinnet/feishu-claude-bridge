@@ -87,6 +87,11 @@ export function getBinding(key: string): BoundSession {
   return created;
 }
 
+/** 只查不建：没有记录就返回 undefined。给清理这类不该凭空造出绑定的场景用。 */
+export function getExistingBinding(key: string): BoundSession | undefined {
+  return load()[key];
+}
+
 export function updateBinding(key: string, patch: Partial<BoundSession>): BoundSession {
   const store = load();
   const next: BoundSession = { ...getBinding(key), ...patch, updatedAt: Date.now() };

@@ -5,6 +5,7 @@
 // 也就是 prompt 必须是 async iterable，不能是字符串。这是架构前提，别改。
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import type { ContentBlock } from "../attachments.js";
 
 /** 可以从外部 push 的异步队列，用作 streaming input 的来源。 */
 class AsyncQueue<T> {
@@ -66,6 +67,8 @@ export type RuntimeInfo = { model?: string; effort?: string };
 export type SessionOptions = {
   cwd: string;
   model?: string;
+  /** 工作目录之外还允许 Claude 直接读写的目录（飞书附件的上传目录） */
+  additionalDirectories?: string[];
   /** 传入则 resume 该会话；配合 fork=true 则从它分叉出新会话 */
   resumeSessionId?: string;
   fork?: boolean;
@@ -108,6 +111,9 @@ export class ClaudeSession {
         // 权限流程在到达回调之前就放行了。
         permissionMode: "default",
         ...(this.opts.model ? { model: this.opts.model } : {}),
+        ...(this.opts.additionalDirectories?.length
+          ? { additionalDirectories: this.opts.additionalDirectories }
+          : {}),
         ...(resume ? { resume } : {}),
         ...(fork ? { forkSession: true } : {}),
         canUseTool: async (toolName, input) =>
@@ -185,12 +191,12 @@ export class ClaudeSession {
     }
   }
 
-  /** 送一条用户消息进去。首次调用会拉起 query。 */
-  send(text: string): void {
+  /** 送一条用户消息进去。首次调用会拉起 query。带附件时 content 是内容块数组。 */
+  send(content: string | ContentBlock[]): void {
     this.start();
     this.queue.push({
       type: "user",
-      message: { role: "user", content: text },
+      message: { role: "user", content },
       parent_tool_use_id: null,
       // 这是人在飞书上敲的字，必须显式标记来源；
       // 缺省会被当作 unattributed，在严格的 isHuman() 信任门上 fail closed。
