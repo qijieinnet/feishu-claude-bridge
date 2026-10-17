@@ -6,6 +6,7 @@
 import { query, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { ContentBlock } from "../attachments.js";
+import { agentEnvironment } from "../agent-env.js";
 
 /** 可以从外部 push 的异步队列，用作 streaming input 的来源。 */
 class AsyncQueue<T> {
@@ -107,6 +108,7 @@ export class ClaudeSession {
       prompt: this.queue.stream(),
       options: {
         cwd: this.opts.cwd,
+        env: agentEnvironment(),
         // 必须是 default：设成 bypassPermissions 会让 canUseTool 变成死代码，
         // 权限流程在到达回调之前就放行了。
         permissionMode: "default",

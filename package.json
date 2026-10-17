@@ -45,6 +45,7 @@
     "pair": "node bin/cli.js pair",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
     "prepublishOnly": "npm run typecheck"
   },
   "dependencies": {
