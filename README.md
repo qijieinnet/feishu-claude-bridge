@@ -1,5 +1,10 @@
 # feishu-claude-bridge
 
+> [!WARNING]
+> **本项目已停止维护，功能已合并进 [agent-loft](https://github.com/qijieinnet/agent-loft)**（同时支持 Claude Code 和 Codex，飞书 + Web）。
+>
+> 迁移：`npm i -g agent-loft`，然后运行 `agent-loft import` 导入本项目的机器人凭据、白名单、配对和会话。npm 包 `feishu-claude-bridge` 已弃用。
+
 在飞书里聊天驱动本机的 Claude Code：手机上说一句，代码在你自己的电脑上跑；遇到敏感操作，飞书弹卡片点一下授权。
 
 基于官方 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 构建。桥接的是 Claude Code 的 **agent 引擎**（SDK 底层拉起 Claude Code CLI 进程），不是 Claude 桌面 app —— 它是一个独立的 headless 客户端，与你桌面上的 Claude Code 平行，共用同一个账号和 `~/.claude` 配置。
